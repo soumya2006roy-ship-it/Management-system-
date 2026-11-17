@@ -372,6 +372,9 @@ export const Views = {
             </a>`;
         }
         navTabs += `<a href="#/organizations" class="btn btn-outline nav-tab-btn" style="display:flex; align-items:center; gap:6px;">Organizations</a>`;
+        navTabs += `<a href="#/schemes" class="btn btn-outline nav-tab-btn" style="display:flex; align-items:center; gap:6px;">
+            <svg style="width:16px;height:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3L1 9L12 15L21 10.09V17H23V9M5 13.18V17.18L12 21L19 17.18V13.18L12 17L5 13.18Z"/></svg> Schemes
+        </a>`;
         if (user.role === 'exec') {
             navTabs += `<a href="#/oversight" class="btn btn-outline nav-tab-btn" style="display:flex; align-items:center; gap:6px;">
                 <svg style="width:16px;height:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17M12,4.5C7,4.5 2.73,7.61 1,12C2.73,16.39 7,19.5 12,19.5C17,19.5 21.27,16.39 23,12C21.27,7.61 17,4.5 12,4.5Z" /></svg> Oversight
@@ -961,5 +964,145 @@ export const Views = {
             </div>
         </div>
     `;
-    }
+    },
+
+    schemes: (schemes = [], projects = [], selectedProjectId = null, projectSchemes = null, user = null) => {
+        const canApply = user && (user.role === 'manager' || user.role === 'exec');
+        const displaySchemes = projectSchemes && projectSchemes.length ? projectSchemes : schemes;
+
+        return `
+        <div class="main-container" style="padding-top: 2rem; padding-bottom: 4rem;">
+            <header class="page-heading">
+                <p class="page-eyebrow">NATIONAL PRODUCTIVITY &amp; SUBSIDY INITIATIVES</p>
+                <h1>Government Schemes &amp; Subsidies</h1>
+                <p class="page-lead">Match your organization's projects with verified national grants, PLI subsidies, and deep-tech policy incentives.</p>
+            </header>
+
+            <div class="card card-3d" style="margin-top: 1.5rem; margin-bottom: 2rem;">
+                <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; justify-content: space-between;">
+                    <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; flex: 1;">
+                        <label for="scheme-project-select" style="font-weight: 600; font-size: 0.9rem; min-width: 140px;">Select Project:</label>
+                        <select id="scheme-project-select" class="form-input" style="max-width: 400px; flex: 1;">
+                            <option value="">-- Choose a Project to Evaluate Eligibility --</option>
+                            ${projects.map(p => `
+                                <option value="${escapeHtml(p.id)}" ${Number(selectedProjectId) === Number(p.id) ? 'selected' : ''}>
+                                    ${escapeHtml(p.name)} (${Number(p.progress) || 0}% progress · ${escapeHtml(p.status || 'Active')})
+                                </option>
+                            `).join('')}
+                        </select>
+                        <button id="btn-check-scheme-match" class="btn btn-primary" ${!projects.length ? 'disabled' : ''}>Check Match</button>
+                    </div>
+                    ${selectedProjectId ? `
+                        <div style="font-size: 0.85rem; color: var(--text-muted);">
+                            Evaluating Project <strong>#${escapeHtml(selectedProjectId)}</strong>
+                        </div>
+                    ` : ''}
+                </div>
+                ${!projects.length ? `
+                    <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.75rem;">
+                        No active organization projects found. Create or join a project from the Dashboard to evaluate scheme eligibility.
+                    </p>
+                ` : ''}
+            </div>
+
+            <div id="schemes-loading" style="display: none; text-align: center; padding: 2rem;">
+                <span class="loading-spinner"></span>
+                <p style="color: var(--text-muted); margin-top: 0.5rem;">Evaluating rule-based eligibility match...</p>
+            </div>
+
+            <div id="schemes-container">
+                <div class="schemes-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 1.5rem;">
+                    ${displaySchemes.length ? displaySchemes.map(s => {
+                        const score = Number(s.matchScore) || 0;
+                        const scoreColor = score >= 70 ? 'var(--success, #10b981)' : score >= 40 ? 'var(--warning, #f59e0b)' : 'var(--text-muted, #94a3b8)';
+                        const isApplied = s.applicationStatus === 'applied' || s.applicationStatus === 'approved' || s.applicationStatus === 'under_review';
+                        
+                        return `
+                        <div class="card scheme-card" style="display: flex; flex-direction: column; justify-content: space-between; border: 1px solid var(--border);">
+                            <div>
+                                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.75rem;">
+                                    <span class="status-pill status-pill--active" style="text-transform: uppercase;">${escapeHtml(s.sector)}</span>
+                                    <span style="font-weight: 700; color: var(--accent); font-size: 1.1rem;">
+                                        ${s.subsidyPercentage ? `${s.subsidyPercentage}% Subsidy` : 'Grant'}
+                                    </span>
+                                </div>
+                                <h3 style="margin-bottom: 0.25rem; color: var(--text-primary); font-size: 1.15rem;">${escapeHtml(s.title)}</h3>
+                                <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.75rem;">${escapeHtml(s.ministry)}</p>
+                                <p style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.4;">${escapeHtml(s.description)}</p>
+
+                                <div style="background: rgba(255,255,255,0.03); padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 1rem;">
+                                    <div style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase;">Eligibility Criteria</div>
+                                    <div style="font-size: 0.82rem; color: var(--text-primary); margin-top: 0.25rem;">${escapeHtml(s.eligibilityCriteria)}</div>
+                                </div>
+
+                                <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+                                    <span>${s.isSampleData ? '<strong style="color:var(--warning);">[Sample Data]</strong>' : '<strong style="color:var(--success);">✓ Verified Official Scheme</strong>'}</span>
+                                    ${s.sourceUrl ? `<a href="${escapeHtml(s.sourceUrl)}" target="_blank" rel="noopener noreferrer" style="color: var(--accent); text-decoration: underline;">Official Source ↗</a>` : ''}
+                                </div>
+
+                                ${selectedProjectId ? `
+                                    <div class="scheme-match-box" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; margin-bottom: 1rem;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                            <span style="font-size: 0.82rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted);">Eligibility Score</span>
+                                            <span style="font-size: 1.25rem; font-weight: 800; color: ${scoreColor};">${score}%</span>
+                                        </div>
+                                        <div style="height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; margin-bottom: 0.75rem;">
+                                            <div style="width: ${score}%; height: 100%; background: ${scoreColor}; transition: width 0.4s ease;"></div>
+                                        </div>
+                                        ${s.rules && s.rules.length ? `
+                                            <div style="font-size: 0.78rem; color: var(--text-secondary);">
+                                                ${s.rules.map(r => `
+                                                    <div style="margin-bottom: 0.25rem; display: flex; gap: 6px; align-items: flex-start;">
+                                                        <span style="color: ${r.matched ? 'var(--success, #10b981)' : 'var(--danger, #ef4444)'}; font-weight: 700;">
+                                                            ${r.matched ? '✓' : '✗'}
+                                                        </span>
+                                                        <span><strong>${escapeHtml(r.name)}</strong>: ${escapeHtml(r.reason)}</span>
+                                                    </div>
+                                                `).join('')}
+                                            </div>
+                                        ` : ''}
+                                        ${s.unknownCriteria && s.unknownCriteria.length ? `
+                                            <div style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed var(--border); font-size: 0.75rem; color: var(--text-muted);">
+                                                <div style="font-weight: 600; text-transform: uppercase; margin-bottom: 0.2rem;">Pending Verification:</div>
+                                                ${s.unknownCriteria.map(u => `
+                                                    <div style="display: flex; gap: 6px; align-items: flex-start;">
+                                                        <span style="color: var(--warning, #f59e0b);">?</span>
+                                                        <span>${escapeHtml(u.criterion)} — ${escapeHtml(u.reason)}</span>
+                                                    </div>
+                                                `).join('')}
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                ` : ''}
+                            </div>
+
+                            <div style="display: flex; gap: 0.5rem; align-items: center; justify-content: space-between; padding-top: 1rem; border-top: 1px solid var(--border); margin-top: 0.5rem;">
+                                <a href="${escapeHtml(s.portalUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm">Portal ↗</a>
+                                <div>
+                                    ${selectedProjectId ? (
+                                        isApplied ? `
+                                            <span class="status-pill status-pill--complete" style="font-weight: 600;">✓ APPLIED</span>
+                                        ` : canApply ? `
+                                            <button class="btn btn-primary btn-sm apply-scheme-btn" data-project-id="${escapeHtml(selectedProjectId)}" data-scheme-id="${escapeHtml(s.id)}">
+                                                Apply
+                                            </button>
+                                        ` : `
+                                            <span style="font-size: 0.75rem; color: var(--text-muted);">Manager required to apply</span>
+                                        `
+                                    ) : `
+                                        <button class="btn btn-outline btn-sm check-scheme-match-prompt-btn" data-scheme-id="${escapeHtml(s.id)}">
+                                            Select Project to Match
+                                        </button>
+                                    `}
+                                </div>
+                            </div>
+                        </div>
+                        `;
+                    }).join('') : '<p class="empty-state">No government schemes are currently active.</p>'}
+                </div>
+            </div>
+        </div>
+        `;
+    },
+
 };

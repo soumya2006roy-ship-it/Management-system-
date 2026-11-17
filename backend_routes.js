@@ -501,6 +501,38 @@ function registerApiRoutes(app, services) {
     });
 
 
+
+    // Government Schemes Endpoints
+    app.get('/api/schemes', authenticate, async (req, res) => {
+        try {
+            const schemes = await services.getGovernmentSchemes(req.query);
+            res.json(schemes);
+        } catch (error) {
+            handleError(res, error);
+        }
+    });
+
+    app.get('/api/projects/:id/schemes', authenticate, async (req, res) => {
+        try {
+            const projectId = Number(req.params.id);
+            const data = await services.getSchemesForProject(req.user.id, projectId);
+            res.json(data);
+        } catch (error) {
+            handleError(res, error);
+        }
+    });
+
+    app.post('/api/projects/:id/schemes/:schemeId/apply', authenticate, async (req, res) => {
+        try {
+            const projectId = Number(req.params.id);
+            const schemeId = Number(req.params.schemeId);
+            const result = await services.applyForScheme(req.user.id, projectId, schemeId);
+            res.json(result);
+        } catch (error) {
+            handleError(res, error);
+        }
+    });
+
     app.post('/api/assistant', authenticate, rateLimit('assistant', 25, 60 * 1000), async (req, res) => {
         try {
             const { message, projectId, confirmedAction } = req.body || {};

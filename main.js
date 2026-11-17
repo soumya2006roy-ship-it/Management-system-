@@ -423,6 +423,107 @@ const routes = {
     '#/manual': async () => {
         await render(Views.manual());
     },
+    '#/schemes': async () => {
+        if (!currentUser) {
+            window.location.hash = '#/login?next=schemes';
+            return;
+        }
+
+        let projects = [];
+        try {
+            const dashData = await store.dashboard(currentUser.id);
+            projects = dashData.allProjects || [];
+        } catch (_e) {}
+
+        let schemes = [];
+        try {
+            schemes = await store.getSchemes();
+        } catch (err) {
+            console.error('Failed to load schemes:', err);
+        }
+
+        let selectedProjectId = projects.length ? projects[0].id : null;
+        let evaluatedSchemes = null;
+
+        if (selectedProjectId) {
+            try {
+                evaluatedSchemes = await store.getProjectSchemes(selectedProjectId);
+            } catch (err) {
+                console.warn('Failed to pre-evaluate project schemes:', err);
+            }
+        }
+
+        const renderSchemesPage = async () => {
+            await render(Views.schemes(schemes, projects, selectedProjectId, evaluatedSchemes, currentUser));
+
+            const projectSelect = document.getElementById('scheme-project-select');
+            const checkMatchBtn = document.getElementById('btn-check-scheme-match');
+            const loadingIndicator = document.getElementById('schemes-loading');
+            const schemesContainer = document.getElementById('schemes-container');
+
+            const performMatchCheck = async (projId) => {
+                if (!projId) {
+                    evaluatedSchemes = null;
+                    selectedProjectId = null;
+                    await renderSchemesPage();
+                    return;
+                }
+                selectedProjectId = projId;
+                if (loadingIndicator) loadingIndicator.style.display = 'block';
+                if (schemesContainer) schemesContainer.style.opacity = '0.5';
+                try {
+                    evaluatedSchemes = await store.getProjectSchemes(projId);
+                } catch (err) {
+                    showToast(err.message || 'Failed to match schemes', 'error');
+                } finally {
+                    await renderSchemesPage();
+                }
+            };
+
+            if (projectSelect) {
+                projectSelect.addEventListener('change', (e) => {
+                    performMatchCheck(e.target.value);
+                });
+            }
+
+            if (checkMatchBtn) {
+                checkMatchBtn.addEventListener('click', () => {
+                    performMatchCheck(projectSelect ? projectSelect.value : selectedProjectId);
+                });
+            }
+
+            document.querySelectorAll('.apply-scheme-btn').forEach((btn) => {
+                btn.addEventListener('click', async (e) => {
+                    const schemeId = e.currentTarget.dataset.schemeId;
+                    const projId = e.currentTarget.dataset.projectId;
+                    e.currentTarget.disabled = true;
+                    e.currentTarget.textContent = 'Submitting...';
+
+                    try {
+                        const res = await store.applyForScheme(projId, schemeId);
+                        showToast(res.message || 'Application submitted successfully!');
+                        evaluatedSchemes = await store.getProjectSchemes(projId);
+                        await renderSchemesPage();
+                    } catch (err) {
+                        showToast(err.message || 'Failed to submit application', 'error');
+                        e.currentTarget.disabled = false;
+                        e.currentTarget.textContent = 'Apply';
+                    }
+                });
+            });
+
+            document.querySelectorAll('.check-scheme-match-prompt-btn').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    if (projectSelect) {
+                        projectSelect.focus();
+                        projectSelect.scrollIntoView({ behavior: 'smooth' });
+                    }
+                });
+            });
+        };
+
+        await renderSchemesPage();
+    },
     '#/login': async () => {
         if (currentUser) {
             const next = new URLSearchParams(window.location.hash.split('?')[1] || '').get('next');

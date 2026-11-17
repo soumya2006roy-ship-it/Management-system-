@@ -466,6 +466,24 @@ class DataStore {
         return await parseJsonSafe(res, 'AI Assistant request failed');
     }
 
-}
 
-export const store = new DataStore();
+    async getSchemes(params = {}) {
+        const query = new URLSearchParams(params).toString();
+        const url = query ? `${API_URL}/schemes?${query}` : `${API_URL}/schemes`;
+        const res = await this.request(url);
+        return parseJsonSafe(res, 'Failed to fetch government schemes');
+    }
+
+    async getProjectSchemes(projectId) {
+        const res = await this.request(`${API_URL}/projects/${projectId}/schemes`);
+        return parseJsonSafe(res, 'Failed to evaluate project schemes');
+    }
+
+    async applyForScheme(projectId, schemeId) {
+        const res = await this.request(`${API_URL}/projects/${projectId}/schemes/${schemeId}/apply`, {
+            method: 'POST'
+        });
+        return parseJsonSafe(res, 'Failed to apply for government scheme');
+    }
+
+}
