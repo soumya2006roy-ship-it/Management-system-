@@ -1667,10 +1667,13 @@ function setupAiAssistant() {
     const formatMessageText = (text) => {
         if (!text) return '';
         // Escape HTML
-        let safe = text
+        let safe = String(text)
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/`/g, '&#96;');
         // Basic Markdown bold & italic
         safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
         safe = safe.replace(/\*(.+?)\*/g, '<em>$1</em>');
@@ -1699,17 +1702,24 @@ function setupAiAssistant() {
     const appendActionCard = (proposal) => {
         const card = document.createElement('div');
         card.className = 'ai-action-card';
-        card.innerHTML = `
-            <div class="ai-action-title">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                Action Confirmation Required
-            </div>
-            <div class="ai-action-desc">${proposal.summary || 'Are you sure you want to perform this action?'}</div>
-            <div class="ai-action-buttons">
-                <button class="ai-action-btn-confirm" id="btn-confirm-action">Confirm Reassign</button>
-                <button class="ai-action-btn-cancel" id="btn-cancel-action">Cancel</button>
-            </div>
+
+        const titleDiv = document.createElement('div');
+        titleDiv.className = 'ai-action-title';
+        titleDiv.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg> Action Confirmation Required';
+
+        const descDiv = document.createElement('div');
+        descDiv.className = 'ai-action-desc';
+        // SECURE: textContent prevents HTML execution of untrusted task titles or names
+        descDiv.textContent = proposal.summary || 'Are you sure you want to perform this action?';
+
+        const buttonsDiv = document.createElement('div');
+        buttonsDiv.className = 'ai-action-buttons';
+        buttonsDiv.innerHTML = `
+            <button class="ai-action-btn-confirm" id="btn-confirm-action">Confirm Reassign</button>
+            <button class="ai-action-btn-cancel" id="btn-cancel-action">Cancel</button>
         `;
+
+        card.append(titleDiv, descDiv, buttonsDiv);
         feed.appendChild(card);
         feed.scrollTop = feed.scrollHeight;
 
@@ -1722,12 +1732,19 @@ function setupAiAssistant() {
             confirmBtn.textContent = 'Executing...';
             try {
                 const res = await store.assistantChat({ confirmedAction: proposal });
-                card.innerHTML = `<div style="color: var(--success, #10b981); font-weight: 500;">✓ Action confirmed and executed</div>`;
+                const successDiv = document.createElement('div');
+                successDiv.style.color = 'var(--success, #10b981)';
+                successDiv.style.fontWeight = '500';
+                successDiv.textContent = '✓ Action confirmed and executed';
+                card.replaceChildren(successDiv);
                 appendMessage(res.text || 'Action successfully executed.', 'bot');
                 showToast('Task reassigned successfully');
                 if (typeof renderApp === 'function') renderApp();
             } catch (err) {
-                card.innerHTML = `<div style="color: var(--danger, #ef4444);">✗ Failed: ${err.message}</div>`;
+                const errDiv = document.createElement('div');
+                errDiv.style.color = 'var(--danger, #ef4444)';
+                errDiv.textContent = `✗ Failed: ${err.message}`;
+                card.replaceChildren(errDiv);
                 showToast(err.message, 'error');
             }
         });

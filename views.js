@@ -5,7 +5,7 @@ function escapeHtml(value) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+        .replace(/'/g, '&#39;').replace(/`/g, '&#96;');
 }
 
 const authShowcase = () => `
@@ -133,7 +133,7 @@ export const Views = {
         </div>
     `,
 
-    login: () => `
+    login: ({ enableDemoAccounts = false } = {}) => `
         <div class="auth-layout">
             ${authShowcase()}
             <div class="card auth-card" style="animation: scaleIn var(--dur-modal) var(--ease-smooth) forwards;">
@@ -160,6 +160,7 @@ export const Views = {
                     <p id="login-error" style="color: var(--error); text-align: center; margin-top: 1rem;"></p>
                 </form>
 
+                ${enableDemoAccounts ? `
                 <div class="demo-credentials-section">
                     <div class="demo-credentials-divider">
                         <span>DEMO ACCOUNTS</span>
@@ -195,6 +196,7 @@ export const Views = {
                         </button>
                     </div>
                 </div>
+                ` : ''}
             </div>
         </div>
     `,
