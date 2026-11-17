@@ -538,26 +538,58 @@ function registerApiRoutes(app, services) {
             const { message, projectId, confirmedAction } = req.body || {};
             const isStream = req.query.stream === '1' || (req.headers.accept && req.headers.accept.includes('text/event-stream'));
 
+            if (isStream) {
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache, no-transform');
+                res.setHeader('Connection', 'keep-alive');
+                res.setHeader('X-Accel-Buffering', 'no');
+                if (typeof res.flushHeaders === 'function') {
+                    res.flushHeaders();
+                }
+
+                const ac = new AbortController();
+                req.on('close', () => {
+                    ac.abort();
+                });
+
+                try {
+                    const result = await services.assistantChatStream(
+                        req.user.id,
+                        {
+                            message,
+                            projectId: projectId ? Number(projectId) : null,
+                            confirmedAction
+                        },
+                        (chunkText) => {
+                            if (!res.writableEnded) {
+                                res.write(`event: chunk\ndata: ${JSON.stringify({ text: chunkText })}\n\n`);
+                                if (typeof res.flush === 'function') {
+                                    res.flush();
+                                }
+                            }
+                        },
+                        ac.signal
+                    );
+
+                    if (!res.writableEnded) {
+                        res.write(`event: done\ndata: ${JSON.stringify(result)}\n\n`);
+                        res.end();
+                    }
+                    return;
+                } catch (streamError) {
+                    if (!res.writableEnded) {
+                        res.write(`event: error\ndata: ${JSON.stringify({ error: streamError.message || 'Streaming failed', status: streamError.status || 500 })}\n\n`);
+                        res.end();
+                    }
+                    return;
+                }
+            }
+
             const result = await services.assistantChat(req.user.id, {
                 message,
                 projectId: projectId ? Number(projectId) : null,
                 confirmedAction
             });
-
-            if (isStream) {
-                res.setHeader('Content-Type', 'text/event-stream');
-                res.setHeader('Cache-Control', 'no-cache');
-                res.setHeader('Connection', 'keep-alive');
-                
-                const fullText = result.text || '';
-                const chunks = fullText.match(/.{1,40}(\s|$)/g) || [fullText];
-                for (const chunk of chunks) {
-                    res.write(`event: chunk\ndata: ${JSON.stringify({ text: chunk })}\n\n`);
-                }
-                res.write(`event: done\ndata: ${JSON.stringify(result)}\n\n`);
-                res.end();
-                return;
-            }
 
             res.json(result);
         } catch (error) {

@@ -466,6 +466,61 @@ class DataStore {
         return await parseJsonSafe(res, 'AI Assistant request failed');
     }
 
+    async assistantChatStream({ message, projectId, confirmedAction } = {}, onChunk = null) {
+        const res = await this.request(`${API_URL}/assistant?stream=1`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream'
+            },
+            body: JSON.stringify({ message, projectId, confirmedAction })
+        });
+
+        if (!res.ok) {
+            return await parseJsonSafe(res, 'AI Assistant request failed');
+        }
+
+        if (res.body && typeof res.body.getReader === 'function') {
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalResult = null;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                let currentEvent = 'message';
+                for (const line of lines) {
+                    if (line.startsWith('event: ')) {
+                        currentEvent = line.slice(7).trim();
+                    } else if (line.startsWith('data: ')) {
+                        const jsonStr = line.slice(6).trim();
+                        if (!jsonStr) continue;
+                        try {
+                            const data = JSON.parse(jsonStr);
+                            if (currentEvent === 'chunk') {
+                                if (onChunk && data.text) onChunk(data.text);
+                            } else if (currentEvent === 'done') {
+                                finalResult = data;
+                            } else if (currentEvent === 'error') {
+                                throw new Error(data.error || 'Streaming error');
+                            }
+                        } catch (e) {
+                            if (currentEvent === 'error') throw e;
+                        }
+                    }
+                }
+            }
+            if (finalResult) return finalResult;
+        }
+
+        return await parseJsonSafe(res, 'AI Assistant request failed');
+    }
+
 
     async getSchemes(params = {}) {
         const query = new URLSearchParams(params).toString();

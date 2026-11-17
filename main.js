@@ -1876,17 +1876,48 @@ function setupAiAssistant() {
         sendBtn.disabled = true;
 
         const typing = showTypingIndicator();
+        let messageRow = null;
+        let streamedText = '';
+
+        const renderStreamChunk = (chunk) => {
+            if (typing && typing.parentNode) {
+                typing.remove();
+            }
+            streamedText += chunk;
+            if (!messageRow) {
+                messageRow = document.createElement('div');
+                messageRow.className = 'ai-help-msg ai-help-msg-bot';
+                feed.appendChild(messageRow);
+            }
+            messageRow.innerHTML = formatMessageText(streamedText);
+            feed.scrollTop = feed.scrollHeight;
+        };
+
         try {
-            const res = await store.assistantChat({ message: question });
-            typing.remove();
-            if (res && res.text) {
-                appendMessage(res.text, 'bot');
+            const res = await store.assistantChatStream({ message: question }, renderStreamChunk);
+            if (typing && typing.parentNode) {
+                typing.remove();
+            }
+            const modeBadge = res?.mode === 'gemini' 
+                ? '<span class="ai-badge ai-badge-gemini" style="display:inline-block; margin-left:6px; font-size:10px; font-weight:600; padding:1px 6px; border-radius:4px; background:rgba(99,102,241,0.15); color:var(--primary, #6366f1); border:1px solid rgba(99,102,241,0.3)">[Gemini AI]</span>'
+                : '<span class="ai-badge ai-badge-local" style="display:inline-block; margin-left:6px; font-size:10px; font-weight:600; padding:1px 6px; border-radius:4px; background:rgba(16,185,129,0.15); color:var(--success, #10b981); border:1px solid rgba(16,185,129,0.3)">[Local Rule Engine]</span>';
+
+            if (!messageRow && res && res.text) {
+                messageRow = document.createElement('div');
+                messageRow.className = 'ai-help-msg ai-help-msg-bot';
+                feed.appendChild(messageRow);
+            }
+            if (messageRow) {
+                messageRow.innerHTML = formatMessageText(res.text || streamedText) + ' ' + modeBadge;
+                feed.scrollTop = feed.scrollHeight;
             }
             if (res && res.proposal) {
                 appendActionCard(res.proposal);
             }
         } catch (err) {
-            typing.remove();
+            if (typing && typing.parentNode) {
+                typing.remove();
+            }
             appendMessage('Sorry, I encountered an error communicating with the assistant service: ' + (err.message || 'Unknown error'), 'bot');
         } finally {
             input.disabled = false;
