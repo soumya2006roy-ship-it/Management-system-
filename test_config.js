@@ -25,6 +25,11 @@ assert.throws(() => createConfig({ ...validProduction, APP_BASE_URL: 'http://ori
 assert.throws(() => createConfig({ ...validProduction, TRUST_PROXY: 'true' }), /TRUST_PROXY/);
 assert.throws(() => createConfig({ ...validProduction, SMTP_PORT: '70000' }), /SMTP_PORT/);
 
+assert.throws(() => createConfig({ ...validProduction, SESSION_SECRET: 'replace-with-a-random-secret-at-least-32-characters-long' }), /SESSION_SECRET/);
+assert.strictEqual(createConfig(validProduction).enableDemoAccounts, false);
+assert.strictEqual(createConfig({ ...validProduction, ENABLE_DEMO_ACCOUNTS: 'true' }).enableDemoAccounts, true);
+assert.strictEqual(createConfig({ ...validProduction, ENABLE_DEMO_ACCOUNTS: 'false' }).enableDemoAccounts, false);
+
 const config = createConfig(validProduction);
 assert.strictEqual(config.nodeEnv, 'production');
 assert.strictEqual(config.port, 8443);

@@ -35,7 +35,7 @@ function getDevelopmentSecret(env) {
         // Create a local-only key on first development startup.
     }
     const secret = crypto.randomBytes(48).toString('base64url');
-    fs.writeFileSync(secretPath, `${secret}\n`, { flag: 'wx', mode: 0o600 });
+    fs.writeFileSync(secretPath, `${secret}\n`, { flag: 'w', mode: 0o600 });
     return secret;
 }
 
@@ -89,6 +89,10 @@ function createConfig(env = process.env) {
     }
 
     const geminiApiKey = String(env.gemini_api_key || env.GEMINI_API_KEY || env.LLM_API_KEY || '').trim();
+    const geminiModel = String(env.GEMINI_MODEL || 'gemini-2.0-flash').trim();
+    const enableDemoAccounts = env.ENABLE_DEMO_ACCOUNTS !== undefined
+        ? (String(env.ENABLE_DEMO_ACCOUNTS).trim().toLowerCase() === 'true' || String(env.ENABLE_DEMO_ACCOUNTS).trim() === '1')
+        : !isProduction;
 
     return Object.freeze({
         nodeEnv,
@@ -99,7 +103,9 @@ function createConfig(env = process.env) {
         sessionSecret,
         appBaseUrl,
         trustProxy,
-        geminiApiKey
+        geminiApiKey,
+        geminiModel,
+        enableDemoAccounts
     });
 }
 
@@ -113,6 +119,8 @@ function loadConfig() {
     process.env.SESSION_SECRET = config.sessionSecret;
     process.env.APP_BASE_URL = config.appBaseUrl;
     process.env.GEMINI_API_KEY = config.geminiApiKey;
+    process.env.GEMINI_MODEL = config.geminiModel;
+    process.env.ENABLE_DEMO_ACCOUNTS = String(config.enableDemoAccounts);
     return config;
 }
 
