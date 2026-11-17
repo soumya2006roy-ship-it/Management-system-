@@ -26,6 +26,19 @@ async function parseJsonSafe(res, fallbackMessage = 'Request failed') {
 class DataStore {
     constructor() {
         this.csrfToken = null;
+        this.clientConfig = null;
+    }
+
+    async getConfig() {
+        if (this.clientConfig) return this.clientConfig;
+        try {
+            const res = await fetch(`${API_URL}/config`, { credentials: 'include' });
+            if (res.ok) {
+                this.clientConfig = await parseJsonSafe(res, 'Unable to load configuration');
+                return this.clientConfig;
+            }
+        } catch (_e) {}
+        return { enableDemoAccounts: false };
     }
 
     getHeaders() {

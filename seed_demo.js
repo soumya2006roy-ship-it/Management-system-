@@ -21,6 +21,7 @@
 
 const { BackendData } = require('./backend_data');
 const { hashSecret } = require('./auth_utils');
+const { loadConfig } = require('./config');
 
 const DEMO_ORG = {
     name: 'ISRO – Indian Space Research Organisation',
@@ -58,6 +59,11 @@ const DEMO_ACCOUNTS = [
 ];
 
 async function seed() {
+    const config = loadConfig();
+    if (!config.enableDemoAccounts) {
+        console.error('Demo account seeding is disabled in production or when ENABLE_DEMO_ACCOUNTS is not true.');
+        process.exit(1);
+    }
     const data = new BackendData();
     await data.init();
 

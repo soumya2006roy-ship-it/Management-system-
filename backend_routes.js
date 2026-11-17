@@ -112,11 +112,25 @@ function registerApiRoutes(app, services) {
         }
     });
 
+    app.get('/api/config', (_req, res) => {
+        const enableDemo = services && services.config
+            ? Boolean(services.config.enableDemoAccounts)
+            : (process.env.ENABLE_DEMO_ACCOUNTS !== undefined
+                ? (process.env.ENABLE_DEMO_ACCOUNTS === 'true' || process.env.ENABLE_DEMO_ACCOUNTS === '1')
+                : process.env.NODE_ENV !== 'production');
+        res.json({ enableDemoAccounts: enableDemo });
+    });
+
     app.get('/api/csrf', (_req, res) => {
         const nonce = crypto.randomBytes(24).toString('base64url');
         const token = `${nonce}.${csrfMac(nonce)}`;
+        const enableDemo = services && services.config
+            ? Boolean(services.config.enableDemoAccounts)
+            : (process.env.ENABLE_DEMO_ACCOUNTS !== undefined
+                ? (process.env.ENABLE_DEMO_ACCOUNTS === 'true' || process.env.ENABLE_DEMO_ACCOUNTS === '1')
+                : process.env.NODE_ENV !== 'production');
         res.setHeader('Set-Cookie', cookieOptions(CSRF_COOKIE, token));
-        res.json({ token });
+        res.json({ token, enableDemoAccounts: enableDemo });
     });
 
     app.get('/api/session', authenticate, (req, res) => {

@@ -82,7 +82,7 @@ app.use((req, res, next) => {
     next();
 });
 const dataLayer = new BackendData();
-const serviceLayer = new BackendServices(dataLayer, createMailer());
+const serviceLayer = new BackendServices(dataLayer, createMailer(), config);
 registerApiRoutes(app, serviceLayer);
 
 app.use('/api', (_req, res) => {

@@ -44,7 +44,8 @@ function formatCsvRow(values) {
 }
 
 class BackendServices {
-    constructor(data, mailer = null) {
+    constructor(data, mailer = null, config = null) {
+        this.config = config;
         this.data = data;
         this.mailer = mailer;
         this.platformAdminIds = new Set();
