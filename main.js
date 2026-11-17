@@ -163,6 +163,28 @@ function loadScript(url) {
     });
 }
 
+function renderSvgFallback(container) {
+    if (!container || container.querySelector('svg.orbit-fallback') || container.querySelector('canvas')) return;
+    container.innerHTML = `
+        <div class="canvas-glow"></div>
+        <svg class="orbit-fallback" viewBox="0 0 400 400" width="100%" height="100%" style="display:block; max-width:400px; margin:auto;" aria-label="Orbital System Visualization">
+            <defs>
+                <radialGradient id="globeGrad" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#d0ad63" stop-opacity="0.25"/>
+                    <stop offset="70%" stop-color="#0a192f" stop-opacity="0.8"/>
+                    <stop offset="100%" stop-color="#050c18" stop-opacity="0.95"/>
+                </radialGradient>
+            </defs>
+            <circle cx="200" cy="200" r="80" fill="url(#globeGrad)" stroke="#d0ad63" stroke-width="1.5" stroke-dasharray="4,4"/>
+            <ellipse cx="200" cy="200" rx="140" ry="45" fill="none" stroke="#d0ad63" stroke-width="1" stroke-opacity="0.4" transform="rotate(-20 200 200)"/>
+            <ellipse cx="200" cy="200" rx="160" ry="55" fill="none" stroke="#d0ad63" stroke-width="1" stroke-opacity="0.3" transform="rotate(25 200 200)"/>
+            <circle cx="200" cy="200" r="16" fill="#d0ad63" fill-opacity="0.8"/>
+            <circle cx="310" cy="160" r="5" fill="#d0ad63"/>
+            <circle cx="80" cy="230" r="4" fill="#6366f1"/>
+        </svg>
+    `;
+}
+
 async function initLanding3D() {
     cleanLanding3D();
 
@@ -170,8 +192,18 @@ async function initLanding3D() {
     if (!container) return;
 
     try {
-        const THREE = await loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
-        if (!THREE || !document.getElementById('canvas3d-container')) return;
+        let THREE = window.THREE;
+        if (!THREE) {
+            try {
+                THREE = await loadScript('/public/vendor/three.min.js');
+            } catch (_localErr) {
+                THREE = await loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
+            }
+        }
+        if (!THREE || !document.getElementById('canvas3d-container')) {
+            renderSvgFallback(container);
+            return;
+        }
 
         const width = container.clientWidth || 450;
         const height = container.clientHeight || 450;
@@ -335,7 +367,8 @@ async function initLanding3D() {
         animate();
 
     } catch (err) {
-        console.warn('Three.js init failed:', err);
+        console.warn('Three.js init failed, falling back to SVG:', err);
+        renderSvgFallback(container);
     }
 }
 
@@ -1660,27 +1693,29 @@ function setupRegisterPage() {
         btn.setAttribute('aria-busy', 'true');
 
         try {
-            await store.register(email, password, 'worker', name);
-
-
-
-            const card = regForm.closest('.card');
-            if (card) {
-                card.innerHTML = `
-                    <h2 class="auth-heading">Account created</h2>
-                    <div class="auth-success" role="status" aria-live="polite">
-                        <p>Your account is ready. Log in with your email and password.</p>
-                        <button id="success-login-btn" class="btn btn-primary" type="button">Proceed to Login</button>
-                    </div>`;
-
-                document.getElementById('success-login-btn').addEventListener('click', () => {
-                    currentUser = null;
-                    updateAuthUI();
-                    const next = new URLSearchParams(window.location.hash.split('?')[1] || '').get('next');
-                    window.location.hash = next === 'organizations' ? '#/login?next=organizations' : '#/login';
-                });
+            const regUser = await store.register(email, password, 'worker', name);
+            if (regUser && regUser.status && regUser.status !== 'active') {
+                const card = regForm.closest('.card');
+                if (card) {
+                    card.innerHTML = `
+                        <h2 class="auth-heading">Registration Pending</h2>
+                        <div class="auth-success" role="status" aria-live="polite">
+                            <p>Your account has been submitted and is pending administrator approval.</p>
+                            <button id="success-login-btn" class="btn btn-primary" type="button">Back to Login</button>
+                        </div>`;
+                    document.getElementById('success-login-btn').addEventListener('click', () => {
+                        window.location.hash = '#/login';
+                    });
+                }
+                return;
             }
 
+            // Active user registered and session established by server
+            currentUser = regUser;
+            updateAuthUI();
+            const next = new URLSearchParams(window.location.hash.split('?')[1] || '').get('next');
+            window.location.hash = next === 'organizations' ? '#/organizations' : '#/dashboard';
+            showToast('Welcome to ORION! Your account has been created.');
         } catch (err) {
             console.error('Account registration failed:', err);
             if (err.status === 409 || /already exists|already registered|email is taken/i.test(err.message)) {

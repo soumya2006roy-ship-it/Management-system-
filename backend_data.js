@@ -8,12 +8,14 @@ class BackendData {
             ? path.resolve(process.env.ORION_DB_PATH)
             : path.join(__dirname, 'orion.db');
         this.db = new sqlite3.Database(dbPath);
-        this.db.configure('busyTimeout', 5000);
+        this.db.configure('busyTimeout', 10000);
         this._txQueue = Promise.resolve();
     }
 
     async init() {
         await this.run('PRAGMA journal_mode = WAL');
+        await this.run('PRAGMA synchronous = NORMAL');
+        await this.run('PRAGMA busy_timeout = 10000');
         await this.run('PRAGMA foreign_keys = ON');
         await this.run('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, appliedAt INTEGER NOT NULL)');
         const fs = require('fs');

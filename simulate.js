@@ -9,7 +9,7 @@ const { BackendServices } = require('./backend_services');
 process.env.ORION_DB_PATH = path.join(os.tmpdir(), `orion-simulation-${process.pid}.db`);
 
 const HOST = '127.0.0.1';
-const PORT = 3210;
+const PORT = Number(process.env.PORT || process.env.SIMULATE_PORT || 3210);
 const BASE = '/api';
 const READY_LOG = '"event":"server_started"';
 let simulationCsrf = null;

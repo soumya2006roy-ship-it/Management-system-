@@ -1,6 +1,20 @@
 const sqlite3 = require('sqlite3').verbose();
 
-function backupDatabase(sourcePath, destinationPath) {
+function checkpointDatabase(dbPath) {
+    return new Promise((resolve) => {
+        const db = new sqlite3.Database(dbPath, (err) => {
+            if (err) return resolve();
+            db.run('PRAGMA wal_checkpoint(TRUNCATE)', () => {
+                db.close(() => resolve());
+            });
+        });
+    });
+}
+
+async function backupDatabase(sourcePath, destinationPath) {
+    // Flush WAL log before backup to ensure full data consistency
+    await checkpointDatabase(sourcePath);
+
     return new Promise((resolve, reject) => {
         const source = new sqlite3.Database(sourcePath, sqlite3.OPEN_READONLY, (openError) => {
             if (openError) return reject(openError);
@@ -19,4 +33,4 @@ function backupDatabase(sourcePath, destinationPath) {
     });
 }
 
-module.exports = { backupDatabase };
+module.exports = { backupDatabase, checkpointDatabase };

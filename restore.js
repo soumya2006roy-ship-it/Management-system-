@@ -22,6 +22,10 @@ async function main() {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         await backupDatabase(config.databasePath, path.join(backupDir, `pre-restore-${timestamp}.db`));
     }
+    // Clean up any stale WAL/SHM files to prevent corruption after restore
+    try { if (fs.existsSync(`${config.databasePath}-wal`)) fs.unlinkSync(`${config.databasePath}-wal`); } catch (_) {}
+    try { if (fs.existsSync(`${config.databasePath}-shm`)) fs.unlinkSync(`${config.databasePath}-shm`); } catch (_) {}
+
     await backupDatabase(source, config.databasePath);
     console.log('Database restore completed. Start the server and verify readiness.');
 }
