@@ -45,7 +45,8 @@ async function run() {
     assert.ok(isHashedSecret(hashed));
     assert.strictEqual(await verifySecret('password123', hashed), true);
     assert.strictEqual(await verifySecret('wrong-password', hashed), false);
-    assert.strictEqual(await verifySecret('password123', 'password123'), true);
+    // Plaintext stored passwords must be strictly rejected (Fix 1.3: scrypt-only enforcement)
+    assert.strictEqual(await verifySecret('password123', 'password123'), false);
     assert.strictEqual(await verifySecret('password123', 'password124'), false);
     assert.strictEqual(await verifySecret('', hashed), false);
     assert.strictEqual(await verifySecret(null, hashed), false);
@@ -207,6 +208,34 @@ async function run() {
     await restoredData.close();
     process.env.ORION_DB_PATH = priorDbPath;
     try { fs.rmSync(backupPath, { force: true }); } catch (_error) {}
+    // --- Test: XSS Render Immunity ---
+    const { Views } = require('./views');
+    const xssPayload = '<img src=x onerror="alert(document.cookie)">';
+    const scriptPayload = '<script>alert("XSS")</script>';
+    const renderedTask = Views.renderTaskRow({
+        id: 999,
+        title: xssPayload,
+        description: scriptPayload,
+        status: 'Active',
+        priority: 'high',
+        progress: 10
+    });
+    assert.ok(!renderedTask.includes('<img src=x'), 'Raw img tag must not appear in rendered HTML');
+    assert.ok(!renderedTask.includes('<script>'), 'Raw script tag must not appear in rendered HTML');
+    assert.ok(renderedTask.includes('&lt;img src=x onerror=&quot;alert(document.cookie)&quot;&gt;'), 'XSS payload must be HTML escaped');
+    assert.ok(renderedTask.includes('&lt;script&gt;alert(&quot;XSS&quot;)&lt;/script&gt;'), 'Script payload must be HTML escaped');
+
+    // --- Test: Raw characters preserved (not stripped) on backend ---
+    const legitTitle = "R&D and O'Brien Infrastructure";
+    const rawData = new BackendData();
+    await rawData.init();
+    const rawServices = new BackendServices(rawData);
+    // Verify plaintext password login is rejected
+    await rawData.run("INSERT INTO users (username, password, name, role) VALUES ('plain_user@test.org', 'plaintext123', 'Plain User', 'worker')");
+    const loginResult = await rawServices.login({ username: 'plain_user@test.org', password: 'plaintext123' });
+    assert.strictEqual(loginResult, null, 'Plaintext password login must return null (rejected)');
+    await rawData.close();
+
     console.log('Security unit tests passed.');
 }
 

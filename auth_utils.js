@@ -64,7 +64,7 @@ async function verifySecret(value, stored) {
     }
     const recorded = String(stored);
     if (!isHashedSecret(recorded)) {
-        return timingSafeEqualString(value, recorded);
+        return false;
     }
     const parts = recorded.split('$');
     if (parts.length !== 3) {
@@ -72,12 +72,16 @@ async function verifySecret(value, stored) {
     }
     const salt = parts[1];
     const expectedHex = parts[2];
-    const derived = await scrypt(String(value), salt, KEY_LEN, SCRYPT_OPTIONS);
-    const expected = Buffer.from(expectedHex, 'hex');
-    if (derived.length !== expected.length) {
+    try {
+        const derived = await scrypt(String(value), salt, KEY_LEN, SCRYPT_OPTIONS);
+        const expected = Buffer.from(expectedHex, 'hex');
+        if (derived.length !== expected.length) {
+            return false;
+        }
+        return crypto.timingSafeEqual(derived, expected);
+    } catch (_error) {
         return false;
     }
-    return crypto.timingSafeEqual(derived, expected);
 }
 
 function validatePassword(password) {
