@@ -197,7 +197,7 @@ async function initLanding3D() {
             try {
                 THREE = await loadScript('/public/vendor/three.min.js');
             } catch (_localErr) {
-                THREE = await loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
+                THREE = null;
             }
         }
         if (!THREE || !document.getElementById('canvas3d-container')) {

@@ -29,7 +29,7 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", 'https://cdnjs.cloudflare.com'],
+            scriptSrc: ["'self'"],
             scriptSrcAttr: ["'none'"],
             styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
             fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
@@ -92,6 +92,13 @@ app.use('/api', (_req, res) => {
 app.get(['/', '/index.html'], (_req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
+
+app.use('/public/vendor', express.static(path.join(__dirname, 'public', 'vendor'), {
+    dotfiles: 'deny',
+    index: false,
+    maxAge: '1h',
+    fallthrough: true
+}));
 
 app.use((req, res, next) => {
     if (req.path.startsWith('/api')) {
