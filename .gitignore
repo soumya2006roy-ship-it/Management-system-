@@ -13,6 +13,8 @@ backups/
 
 *.exe
 REMEDIATION_GUIDE.md
+REMEDIATION_ROUND2.md
+REMEDIATION_ROUND2.txt
 notes
 need.txt
 *.sqlite-wal
