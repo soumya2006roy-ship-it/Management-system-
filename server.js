@@ -85,7 +85,7 @@ const dataLayer = new BackendData();
 const serviceLayer = new BackendServices(dataLayer, createMailer(), config);
 registerApiRoutes(app, serviceLayer);
 
-app.use('/api', (_req, res) => {
+app.use(['/api/v1', '/api'], (_req, res) => {
     res.status(404).json({ error: 'Not found' });
 });
 

@@ -203,7 +203,7 @@ async function runBasicScenario() {
             name: 'Sim Manager',
             role: 'manager',
         },
-        200,
+        201,
         'manager registration'
     );
     assert(!manager.password && !manager.securityAnswer, 'registration must not return secrets');
@@ -220,7 +220,7 @@ async function runBasicScenario() {
             name: 'Sim Worker',
             role: 'worker',
         },
-        200,
+        201,
         'worker registration'
     );
     assert(await setSimulationRole(workerUsername, 'worker', organizationId) === 1, 'worker should be scoped to the simulation organization');
@@ -233,7 +233,7 @@ async function runBasicScenario() {
             name: 'Sim Exec',
             role: 'executive',
         },
-        200,
+        201,
         'executive registration'
     );
     assert(exec.role === 'worker', 'public registration must not grant executive privileges');
@@ -245,7 +245,7 @@ async function runBasicScenario() {
         'POST',
         '/projects',
         { name: `Simulation Project ${stamp}` },
-        200,
+        201,
         'project creation',
         manager.token
     );
@@ -260,7 +260,7 @@ async function runBasicScenario() {
             createdBy: manager.id,
             deadline: new Date(Date.now() + 86400000).toISOString()
         },
-        200,
+        201,
         'task creation',
         manager.token
     );
@@ -289,7 +289,7 @@ async function runFullScenario() {
             name: 'Outsider Worker',
             role: 'worker',
         },
-        200,
+        201,
         'outsider registration'
     );
 
@@ -325,7 +325,7 @@ async function runFullScenario() {
         'POST',
         '/reports',
         { taskId, submittedBy: workerId, proposedProgress: 40, reportText: 'Phase 1 complete' },
-        200,
+        201,
         'submit first report',
         worker.token
     );
@@ -333,7 +333,7 @@ async function runFullScenario() {
         'POST',
         '/reports',
         { taskId, submittedBy: workerId, proposedProgress: 75, reportText: 'Second report needs review' },
-        200,
+        201,
         'submit second report',
         worker.token
     );
@@ -468,7 +468,7 @@ async function runFullScenario() {
     assert(platformAdmins.some((admin) => Number(admin.id) === Number(platform.id)), 'platform administrator can open the website admin section');
     const secondaryAdmin = await assertStatus('POST', '/platform/admins', { email: `sim_admin_${stamp}@example.test`, name: 'Simulation Admin', password: 'valid-admin-password-123' }, 201, 'create another platform admin', platform.token);
     assert(secondaryAdmin.isPlatformAdmin && !secondaryAdmin.password, 'new admin is privileged without returning password data');
-    const applicant = await assertStatus('POST', '/register', { email: `org_owner_${stamp}@example.test`, name: 'Organization Applicant', password: 'password123' }, 200, 'organization applicant signup');
+    const applicant = await assertStatus('POST', '/register', { email: `org_owner_${stamp}@example.test`, name: 'Organization Applicant', password: 'password123' }, 201, 'organization applicant signup');
     assert(applicant.role === 'worker', 'organization applicants begin as workers');
     await assertStatus('POST', '/platform/admins', { email: `blocked_admin_${stamp}@example.test`, name: 'Blocked Admin', password: 'valid-admin-password-456' }, 403, 'non-admin cannot create website admins', applicant.token);
     await assertStatus('POST', '/register', { email: applicant.username, name: 'Duplicate Applicant', password: 'password123' }, 409, 'reject duplicate account email');
@@ -479,12 +479,12 @@ async function runFullScenario() {
     const owner = await assertStatus('POST', '/login', { username: applicant.username, password: 'password123' }, 200, 'approved applicant manager login');
     assert(owner.role === 'manager' && owner.organizationId, 'approved applicant becomes organization manager');
     const invite = await assertStatus('POST', '/organizations/invites', { maxUses: 1, expiresInDays: 1 }, 201, 'create single-use invite', owner.token);
-    const member = await assertStatus('POST', '/register', { email: `org_member_${stamp}@example.test`, name: 'Invited Member', password: 'password123' }, 200, 'invited member signup');
+    const member = await assertStatus('POST', '/register', { email: `org_member_${stamp}@example.test`, name: 'Invited Member', password: 'password123' }, 201, 'invited member signup');
     const redemption = await assertStatus('POST', '/organizations/redeem-invite', { code: invite.code }, 200, 'redeem invite', member.token);
     assert(Number(redemption.organization.id) === Number(owner.organizationId), 'invite should join the verified organization');
     await assertStatus('POST', '/organizations/redeem-invite', { code: invite.code }, 409, 'prevent duplicate membership', member.token);
-    const orgProject = await assertStatus('POST', '/projects', { name: 'Verified workflow project' }, 200, 'create organization project', owner.token);
-    const orgTask = await assertStatus('POST', '/tasks', { projectId: orgProject.id, title: 'Subtask workflow', assignedTo: member.id }, 200, 'create organization task', owner.token);
+    const orgProject = await assertStatus('POST', '/projects', { name: 'Verified workflow project' }, 201, 'create organization project', owner.token);
+    const orgTask = await assertStatus('POST', '/tasks', { projectId: orgProject.id, title: 'Subtask workflow', assignedTo: member.id }, 201, 'create organization task', owner.token);
     const subtask = await assertStatus('POST', `/tasks/${orgTask.id}/subtasks`, { title: 'Reviewed milestone', assignedTo: member.id }, 201, 'create subtask', owner.token);
     await assertStatus('POST', `/subtasks/${subtask.id}/submit`, { submissionText: 'Completed and ready for review.' }, 200, 'submit subtask', member.token);
     await assertStatus('POST', `/subtasks/${subtask.id}/review`, { action: 'approve', reviewComment: 'Accepted.' }, 200, 'approve subtask', owner.token);

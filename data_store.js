@@ -1,10 +1,11 @@
 const API_URL = (() => {
     if (typeof window !== 'undefined' && window.location) {
         if (window.location.port && window.location.port !== '3000' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-            return `http://${window.location.hostname}:3000/api`;
+            const protocol = window.location.protocol;
+            return `${protocol}//${window.location.hostname}:3000/api/v1`;
         }
     }
-    return '/api';
+    return '/api/v1';
 })();
 
 async function parseJsonSafe(res, fallbackMessage = 'Request failed') {

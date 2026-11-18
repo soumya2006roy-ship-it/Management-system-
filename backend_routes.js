@@ -1,3 +1,4 @@
+const express = require('express');
 const { ApiError } = require('./backend_services');
 const crypto = require('crypto');
 const { logError } = require('./logger');
@@ -36,7 +37,18 @@ function handleError(res, error) {
 }
 
 function registerApiRoutes(app, services) {
-    app.use('/api', (req, res, next) => {
+    const router = express.Router();
+    const isMock = typeof app.listen !== 'function' && typeof app.handle !== 'function';
+
+    const register = (method, path, ...handlers) => {
+        router[method](path, ...handlers);
+        if (isMock && typeof app[method] === 'function') {
+            app[method](`/api${path}`, ...handlers);
+            app[method](`/api/v1${path}`, ...handlers);
+        }
+    };
+
+    router.use((req, res, next) => {
         if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
         const origin = req.headers.origin;
         const referer = req.headers.referer;
@@ -64,6 +76,7 @@ function registerApiRoutes(app, services) {
         }
         next();
     });
+
     const rateLimit = (name, limit, windowMs) => async (req, res, next) => {
         try {
             // Do not trust forwarded headers unless an explicit proxy deployment is configured.
@@ -78,6 +91,7 @@ function registerApiRoutes(app, services) {
             next();
         } catch (error) { handleError(res, error); }
     };
+
     const authenticate = async (req, res, next) => {
         try {
             const token = cookies(req)[SESSION_COOKIE];
@@ -102,7 +116,7 @@ function registerApiRoutes(app, services) {
         }
     };
 
-    app.get('/api/health', async (_req, res) => {
+    register('get', '/health', async (_req, res) => {
         try {
             await services.checkDatabase();
             res.json({ ok: true, status: 'ready' });
@@ -112,7 +126,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/config', (_req, res) => {
+    register('get', '/config', (_req, res) => {
         const enableDemo = services && services.config
             ? Boolean(services.config.enableDemoAccounts)
             : (process.env.ENABLE_DEMO_ACCOUNTS !== undefined
@@ -121,7 +135,7 @@ function registerApiRoutes(app, services) {
         res.json({ enableDemoAccounts: enableDemo });
     });
 
-    app.get('/api/csrf', (_req, res) => {
+    register('get', '/csrf', (_req, res) => {
         const nonce = crypto.randomBytes(24).toString('base64url');
         const token = `${nonce}.${csrfMac(nonce)}`;
         const enableDemo = services && services.config
@@ -133,22 +147,22 @@ function registerApiRoutes(app, services) {
         res.json({ token, enableDemoAccounts: enableDemo });
     });
 
-    app.get('/api/session', authenticate, (req, res) => {
+    register('get', '/session', authenticate, (req, res) => {
         res.json(req.user);
     });
 
-    app.post('/api/register', rateLimit('register', 8, 60 * 60 * 1000), async (req, res) => {
+    register('post', '/register', rateLimit('register', 8, 60 * 60 * 1000), async (req, res) => {
         try {
             const result = await services.registerUser(req.body || {});
             const { token, ...user } = result;
             res.setHeader('Set-Cookie', cookieOptions(SESSION_COOKIE, token, { httpOnly: true }));
-            res.json(user);
+            res.status(201).json(user);
         } catch (error) {
             handleError(res, error);
         }
     });
 
-    app.post('/api/login', rateLimit('login', 12, 15 * 60 * 1000), async (req, res) => {
+    register('post', '/login', rateLimit('login', 12, 15 * 60 * 1000), async (req, res) => {
         try {
             const user = await services.login(req.body || {});
             if (!user) {
@@ -163,7 +177,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/logout', async (req, res) => {
+    register('post', '/logout', async (req, res) => {
         try {
             const token = cookies(req)[SESSION_COOKIE];
             if (token) await services.destroySession(token);
@@ -172,7 +186,7 @@ function registerApiRoutes(app, services) {
         } catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/password-reset/request', rateLimit('password-reset-ip', 8, 60 * 60 * 1000), async (req, res) => {
+    register('post', '/password-reset/request', rateLimit('password-reset-ip', 8, 60 * 60 * 1000), async (req, res) => {
         try {
             res.json(await services.requestPasswordReset(req.body || {}));
         } catch (error) {
@@ -180,7 +194,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/password-reset/confirm', rateLimit('password-reset-confirm', 8, 60 * 60 * 1000), async (req, res) => {
+    register('post', '/password-reset/confirm', rateLimit('password-reset-confirm', 8, 60 * 60 * 1000), async (req, res) => {
         try {
             const result = await services.resetPassword(req.body || {});
             res.json(result);
@@ -189,7 +203,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/dashboard/:userId', authenticate, async (req, res) => {
+    register('get', '/dashboard/:userId', authenticate, async (req, res) => {
         try {
             if (Number(req.user.id) !== Number(req.params.userId)) {
                 res.status(403).json({ error: "Access denied: Cannot view another user's dashboard" });
@@ -202,7 +216,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/tasks', authenticate, async (req, res) => {
+    register('get', '/tasks', authenticate, async (req, res) => {
         try {
             const result = await services.getTasksPaginated(req.user.id, req.query);
             res.json(result);
@@ -211,7 +225,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/projects', authenticate, async (req, res) => {
+    register('get', '/projects', authenticate, async (req, res) => {
         try {
             const result = await services.getProjectsPaginated(req.user.id, req.query);
             res.json(result);
@@ -220,7 +234,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/updates', authenticate, async (req, res) => {
+    register('get', '/updates', authenticate, async (req, res) => {
         try {
             const result = await services.getUpdatesPaginated(req.user.id, req.query);
             res.json(result);
@@ -229,7 +243,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/members', authenticate, async (req, res) => {
+    register('get', '/members', authenticate, async (req, res) => {
         try {
             const result = await services.getMembersPaginated(req.user.id, req.query);
             res.json(result);
@@ -238,20 +252,20 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/projects', authenticate, async (req, res) => {
+    register('post', '/projects', authenticate, async (req, res) => {
         try {
             if (req.user.role !== 'manager') {
                 res.status(403).json({ error: 'Access denied: Only managers can launch projects' });
                 return;
             }
             const result = await services.createProject({ ...req.body, creatorId: req.user.id });
-            res.json(result);
+            res.status(201).json(result);
         } catch (error) {
             handleError(res, error);
         }
     });
 
-    app.post('/api/tasks', authenticate, async (req, res) => {
+    register('post', '/tasks', authenticate, async (req, res) => {
         try {
             if (req.user.role !== 'manager') {
                 res.status(403).json({ error: 'Access denied: Only managers can assign tasks' });
@@ -263,13 +277,13 @@ function registerApiRoutes(app, services) {
                 return;
             }
             const result = await services.createTask({ ...req.body, createdBy: req.user.id });
-            res.json(result);
+            res.status(201).json(result);
         } catch (error) {
             handleError(res, error);
         }
     });
 
-    app.patch('/api/tasks/:id', authenticate, async (req, res) => {
+    register('patch', '/tasks/:id', authenticate, async (req, res) => {
         try {
             const taskId = Number(req.params.id);
             if (isNaN(taskId) || taskId <= 0) {
@@ -283,7 +297,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/tasks/:id/reassign', authenticate, async (req, res) => {
+    register('post', '/tasks/:id/reassign', authenticate, async (req, res) => {
         try {
             const taskId = Number(req.params.id);
             if (isNaN(taskId) || taskId <= 0) {
@@ -298,7 +312,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.delete('/api/tasks/:id', authenticate, async (req, res) => {
+    register('delete', '/tasks/:id', authenticate, async (req, res) => {
         try {
             const taskId = Number(req.params.id);
             if (isNaN(taskId) || taskId <= 0) {
@@ -312,16 +326,11 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/tasks/update', authenticate, async (req, res) => {
-        try {
-            const result = await services.updateTask({ ...req.body, requesterId: req.user.id });
-            res.json(result);
-        } catch (error) {
-            handleError(res, error);
-        }
+    register('post', '/tasks/update', (_req, res) => {
+        res.status(410).json({ error: 'Endpoint deprecated. Use PATCH /api/v1/tasks/:id instead.' });
     });
 
-    app.get('/api/institutions', authenticate, async (req, res) => {
+    register('get', '/institutions', authenticate, async (req, res) => {
         try {
             if (req.query.page || req.query.limit) {
                 const result = await services.getInstitutionsPaginated(req.query);
@@ -335,90 +344,90 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/institutions', authenticate, async (req, res) => {
+    register('post', '/institutions', authenticate, async (req, res) => {
         try {
             if (req.user.role !== 'manager' && req.user.role !== 'exec') {
                 res.status(403).json({ error: 'Access denied: Only managers or executives can register institutions' });
                 return;
             }
             const result = await services.addInstitution({ ...(req.body || {}), creatorId: req.user.id });
-            res.json(result);
+            res.status(201).json(result);
         } catch (error) {
             handleError(res, error);
         }
     });
 
-    app.post('/api/organizations/applications', authenticate, rateLimit('organization-application', 3, 60 * 60 * 1000), async (req, res) => {
+    register('post', '/organizations/applications', authenticate, rateLimit('organization-application', 3, 60 * 60 * 1000), async (req, res) => {
         try { res.status(201).json(await services.submitOrganizationApplication(req.user.id, req.body || {})); }
         catch (error) { handleError(res, error); }
     });
 
-    app.get('/api/organizations/applications/mine', authenticate, async (req, res) => {
+    register('get', '/organizations/applications/mine', authenticate, async (req, res) => {
         try { res.json(await services.getMyOrganizationApplication(req.user.id)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.get('/api/platform/organization-applications', authenticate, async (req, res) => {
+    register('get', '/platform/organization-applications', authenticate, async (req, res) => {
         try { res.json(await services.getOrganizationApplications(req.user.id)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/platform/organization-applications/:id/review', authenticate, async (req, res) => {
+    register('post', '/platform/organization-applications/:id/review', authenticate, async (req, res) => {
         try { res.json(await services.reviewOrganizationApplication(req.params.id, req.user.id, req.body && req.body.action, req.body && req.body.reviewComment)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.get('/api/platform/admins', authenticate, async (req, res) => {
+    register('get', '/platform/admins', authenticate, async (req, res) => {
         try { res.json(await services.getPlatformAdmins(req.user.id)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/platform/admins', authenticate, async (req, res) => {
+    register('post', '/platform/admins', authenticate, async (req, res) => {
         try { res.status(201).json(await services.createPlatformAdmin(req.user.id, req.body || {})); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/organizations/invites', authenticate, async (req, res) => {
+    register('post', '/organizations/invites', authenticate, async (req, res) => {
         try { res.status(201).json(await services.createOrganizationInvite(req.user.id, req.body || {})); }
         catch (error) { handleError(res, error); }
     });
 
-    app.get('/api/organizations/invites', authenticate, async (req, res) => {
+    register('get', '/organizations/invites', authenticate, async (req, res) => {
         try { res.json(await services.getOrganizationInvites(req.user.id)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/organizations/invites/:id/revoke', authenticate, async (req, res) => {
+    register('post', '/organizations/invites/:id/revoke', authenticate, async (req, res) => {
         try { res.json(await services.revokeOrganizationInvite(req.user.id, req.params.id)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/organizations/redeem-invite', authenticate, rateLimit('invite-redemption', 8, 15 * 60 * 1000), async (req, res) => {
+    register('post', '/organizations/redeem-invite', authenticate, rateLimit('invite-redemption', 8, 15 * 60 * 1000), async (req, res) => {
         try { res.json(await services.redeemOrganizationInvite(req.user.id, req.body && req.body.code)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/tasks/:id/subtasks', authenticate, async (req, res) => {
+    register('post', '/tasks/:id/subtasks', authenticate, async (req, res) => {
         try { res.status(201).json(await services.createSubtask(req.user.id, { ...(req.body || {}), parentTaskId: req.params.id })); }
         catch (error) { handleError(res, error); }
     });
 
-    app.get('/api/tasks/:id/subtasks', authenticate, async (req, res) => {
+    register('get', '/tasks/:id/subtasks', authenticate, async (req, res) => {
         try { res.json(await services.getSubtasks(req.params.id, req.user.id)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/subtasks/:id/submit', authenticate, async (req, res) => {
+    register('post', '/subtasks/:id/submit', authenticate, async (req, res) => {
         try { res.json(await services.submitSubtask(req.params.id, req.user.id, req.body || {})); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/subtasks/:id/review', authenticate, async (req, res) => {
+    register('post', '/subtasks/:id/review', authenticate, async (req, res) => {
         try { res.json(await services.reviewSubtask(req.params.id, req.user.id, req.body && req.body.action, req.body && req.body.reviewComment)); }
         catch (error) { handleError(res, error); }
     });
 
-    app.post('/api/users/:id/organization', authenticate, async (req, res) => {
+    register('post', '/users/:id/organization', authenticate, async (req, res) => {
         try {
             if (Number(req.user.id) !== Number(req.params.id)) {
                 res.status(403).json({ error: 'Access denied: Cannot join organization for another user' });
@@ -431,7 +440,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/users/:id/organization', authenticate, async (req, res) => {
+    register('get', '/users/:id/organization', authenticate, async (req, res) => {
         try {
             if (Number(req.user.id) !== Number(req.params.id)) {
                 res.status(403).json({ error: "Access denied: Cannot view another user's organization" });
@@ -444,7 +453,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/reports', authenticate, async (req, res) => {
+    register('post', '/reports', authenticate, async (req, res) => {
         try {
             const submittedBy = req.body && req.body.submittedBy != null ? req.body.submittedBy : req.user.id;
             if (Number(req.user.id) !== Number(submittedBy)) {
@@ -452,13 +461,13 @@ function registerApiRoutes(app, services) {
                 return;
             }
             const result = await services.submitReport({ ...req.body, submittedBy: req.user.id });
-            res.json(result);
+            res.status(201).json(result);
         } catch (error) {
             handleError(res, error);
         }
     });
 
-    app.get('/api/reports/pending', authenticate, async (req, res) => {
+    register('get', '/reports/pending', authenticate, async (req, res) => {
         try {
             const reviewerId = req.query.reviewerId != null ? req.query.reviewerId : req.user.id;
             if (Number(req.user.id) !== Number(reviewerId)) {
@@ -472,7 +481,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/reports/:id/review', authenticate, async (req, res) => {
+    register('post', '/reports/:id/review', authenticate, async (req, res) => {
         try {
             const reviewerId = req.body && req.body.reviewerId != null ? req.body.reviewerId : req.user.id;
             if (Number(req.user.id) !== Number(reviewerId)) {
@@ -486,7 +495,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/tasks/:id/reports', authenticate, async (req, res) => {
+    register('get', '/tasks/:id/reports', authenticate, async (req, res) => {
         try {
             const requesterId = req.query.requesterId != null ? req.query.requesterId : req.user.id;
             if (Number(req.user.id) !== Number(requesterId)) {
@@ -500,10 +509,8 @@ function registerApiRoutes(app, services) {
         }
     });
 
-
-
     // Government Schemes Endpoints
-    app.get('/api/schemes', authenticate, async (req, res) => {
+    register('get', '/schemes', authenticate, async (req, res) => {
         try {
             const schemes = await services.getGovernmentSchemes(req.query);
             res.json(schemes);
@@ -512,7 +519,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/projects/:id/schemes', authenticate, async (req, res) => {
+    register('get', '/projects/:id/schemes', authenticate, async (req, res) => {
         try {
             const projectId = Number(req.params.id);
             const data = await services.getSchemesForProject(req.user.id, projectId);
@@ -522,7 +529,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/projects/:id/schemes/:schemeId/apply', authenticate, async (req, res) => {
+    register('post', '/projects/:id/schemes/:schemeId/apply', authenticate, async (req, res) => {
         try {
             const projectId = Number(req.params.id);
             const schemeId = Number(req.params.schemeId);
@@ -533,7 +540,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.post('/api/assistant', authenticate, rateLimit('assistant', 25, 60 * 1000), async (req, res) => {
+    register('post', '/assistant', authenticate, rateLimit('assistant', 25, 60 * 1000), async (req, res) => {
         try {
             const { message, projectId, confirmedAction } = req.body || {};
             const isStream = req.query.stream === '1' || (req.headers.accept && req.headers.accept.includes('text/event-stream'));
@@ -597,9 +604,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-
-
-    app.get('/api/export/tasks/csv', authenticate, async (req, res) => {
+    register('get', '/export/tasks/csv', authenticate, async (req, res) => {
         try {
             const dateStr = new Date().toISOString().split('T')[0];
             res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -610,7 +615,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/export/projects/csv', authenticate, async (req, res) => {
+    register('get', '/export/projects/csv', authenticate, async (req, res) => {
         try {
             const dateStr = new Date().toISOString().split('T')[0];
             res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -621,7 +626,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/export/members/csv', authenticate, async (req, res) => {
+    register('get', '/export/members/csv', authenticate, async (req, res) => {
         try {
             const dateStr = new Date().toISOString().split('T')[0];
             res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -632,7 +637,7 @@ function registerApiRoutes(app, services) {
         }
     });
 
-    app.get('/api/export/projects/:id/pdf', authenticate, async (req, res) => {
+    register('get', '/export/projects/:id/pdf', authenticate, async (req, res) => {
         try {
             const projectId = Number(req.params.id);
             if (!projectId || isNaN(projectId)) {
@@ -648,6 +653,11 @@ function registerApiRoutes(app, services) {
         }
     });
 
+    if (typeof app.use === 'function') {
+        app.use('/api/v1', router);
+        app.use('/api', router);
+    }
+    return router;
 }
 
 module.exports = { registerApiRoutes };

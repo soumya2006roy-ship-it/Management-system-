@@ -635,7 +635,7 @@ async function run() {
         };
         const resManager = createMockRes();
         await instHandler(reqManager, resManager);
-        assert.strictEqual(resManager.statusCode, 200, 'Managers must be allowed to register institutions');
+        assert.strictEqual(resManager.statusCode, 201, 'Managers must be allowed to register institutions');
         assert.strictEqual(resManager.body.name, 'Manager Registered Org');
         assert.strictEqual(resManager.body.verificationStatus, 'approved');
 

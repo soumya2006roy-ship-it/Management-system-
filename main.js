@@ -2040,7 +2040,7 @@ document.addEventListener('click', async (e) => {
             if (statusSelect && statusSelect.value) params.append('status', statusSelect.value);
 
             const dateStr = new Date().toISOString().split('T')[0];
-            const downloadUrl = `/api/export/tasks/csv?${params.toString()}`;
+            const downloadUrl = `/api/v1/export/tasks/csv?${params.toString()}`;
             const link = document.createElement('a');
             link.href = downloadUrl;
             link.download = `tasks_${dateStr}.csv`;
@@ -2065,7 +2065,7 @@ document.addEventListener('click', async (e) => {
         exportProjectsBtn.textContent = 'Exporting...';
         try {
             const dateStr = new Date().toISOString().split('T')[0];
-            const downloadUrl = '/api/export/projects/csv';
+            const downloadUrl = '/api/v1/export/projects/csv';
             const link = document.createElement('a');
             link.href = downloadUrl;
             link.download = `projects_${dateStr}.csv`;
@@ -2092,7 +2092,7 @@ document.addEventListener('click', async (e) => {
         exportPdfBtn.textContent = 'Generating...';
         try {
             const dateStr = new Date().toISOString().split('T')[0];
-            const downloadUrl = `/api/export/projects/${encodeURIComponent(projectId)}/pdf`;
+            const downloadUrl = `/api/v1/export/projects/${encodeURIComponent(projectId)}/pdf`;
             const link = document.createElement('a');
             link.href = downloadUrl;
             link.download = `project_${projectId}_report_${dateStr}.pdf`;
