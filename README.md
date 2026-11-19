@@ -12,6 +12,8 @@ ORION is a role-based project and task management dashboard designed for governm
 - **Government Schemes Engine**: Dynamic rule-based eligibility evaluation matching departmental projects against verified national schemes, with role-gated application workflows.
 - **AI Assistant with Progressive SSE Streaming**: Secure conversational assistant supporting task queries, project health summaries, and safe two-phase mutation proposals (e.g., reassignment). Powered by Google Gemini (header-authenticated) with an automatic offline local rule-engine fallback.
 - **High-Performance Scalability**: Cursor-based pagination on large task collections, indexed queries, streaming CSV exports, and server-side PDF reporting.
+- **API Versioning & REST Compliance**: All modern client endpoints are mounted at `/api/v1` with a backward-compatible `/api` legacy alias. Resource creations strictly return HTTP 201 Created. Deprecated routes return HTTP 410 Gone.
+- **Offline & Air-Gapped Ready**: Vendored Three.js static assets served locally via `/public/vendor/three.min.js`, backed by an air-gapped SVG vector fallback. Content Security Policy is hardened with `script-src: ['self']` (no external CDNs).
 - **Hardened Security**: Salted scrypt-only password hashing, complete render-sink HTML escaping (XSS mitigation), strict CSP, production session secret validation, and rate limiting.
 
 ---
@@ -159,5 +161,7 @@ npm run test:simulate
 8. `test_schemes.js`: Government schemes catalog provenance, rule-based matching, tenant scoping, idempotent applications.
 9. `test_assistant.js`: AI assistant tools, destructive proposal guards, cross-org isolation.
 10. `test_assistant_streaming.js`: SSE streaming parsing, header-based Gemini authentication, abort signal handling.
+11. `test_api_v1.js`: API v1 routing, `/api` legacy compatibility alias, REST 201 Created codes, and 410 Gone deprecation.
+12. `test_data_integrity.js`: Migration 005 timestamp standardization, case-insensitive overdue detection, transaction concurrency, and queue non-poisoning.
 
 *Note on Sandboxed Environments*: The integration simulation script (`simulate.js`) requires network socket binding for loopback HTTP traffic. In environments where loopback TCP sockets are restricted by a sandbox, run unit test suites (`npm test`) or execute the simulation outside the isolation sandbox.

@@ -754,6 +754,36 @@ class BackendServices {
         return { id: result.lastID, success: true };
     }
 
+    canonicalizeDate(value) {
+        if (!value) return null;
+        const str = String(value).trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+            const d = new Date(`${str}T00:00:00Z`);
+            if (isNaN(d.getTime())) throw new ApiError(400, 'Invalid deadline date');
+            return str;
+        }
+        let d;
+        if (typeof value === 'number' || /^\d+$/.test(str)) {
+            d = new Date(Number(value));
+        } else {
+            d = new Date(str);
+        }
+        if (isNaN(d.getTime())) throw new ApiError(400, 'Invalid deadline date');
+        return d.toISOString();
+    }
+
+    isDeadlineOverdue(deadline, now = Date.now()) {
+        if (!deadline) return false;
+        const str = String(deadline).trim();
+        if (!str) return false;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+            const todayStr = new Date(now).toISOString().split('T')[0];
+            return str < todayStr;
+        }
+        const ms = isNaN(Number(str)) ? new Date(str).getTime() : Number(str);
+        return !isNaN(ms) && ms < now;
+    }
+
     async createTask({ projectId, title, assignedTo, deadline, createdBy, description = '', priority = 'normal' }) {
         const taskTitle = String(title || '').trim();
         if (!projectId || !taskTitle || !assignedTo || !createdBy) {
@@ -762,11 +792,9 @@ class BackendServices {
         if (taskTitle.length > 200) {
             throw new ApiError(400, 'Task title must be 200 characters or fewer');
         }
+        let canonicalDeadline = null;
         if (deadline) {
-            const parsed = new Date(deadline);
-            if (isNaN(parsed.getTime())) {
-                throw new ApiError(400, 'Invalid deadline date');
-            }
+            canonicalDeadline = this.canonicalizeDate(deadline);
         }
         const project = await this.data.get('SELECT id, organizationId FROM projects WHERE id = ?', [projectId]);
         if (!project) {
@@ -793,7 +821,7 @@ class BackendServices {
         const taskPriority = ['low', 'normal', 'high', 'urgent'].includes(priority) ? priority : 'normal';
         const result = await this.data.run(
             "INSERT INTO tasks (projectId, title, assignedTo, createdBy, status, progress, deadline, description, priority) VALUES (?, ?, ?, ?, 'In Progress', 0, ?, ?, ?)",
-            [projectId, taskTitle, assignedTo, createdBy, deadline || null, taskDesc, taskPriority]
+            [projectId, taskTitle, assignedTo, createdBy, canonicalDeadline, taskDesc, taskPriority]
         );
         this.data.addUpdate(creator.name || 'Manager', `Assigned task "${taskTitle}" to ${worker.name || 'worker'}`, creator.organizationId);
         return { id: result.lastID, success: true };
@@ -889,12 +917,9 @@ class BackendServices {
 
         if (deadline !== undefined) {
             if (deadline !== null && deadline !== '') {
-                const parsed = new Date(deadline);
-                if (isNaN(parsed.getTime())) {
-                    throw new ApiError(400, 'Invalid deadline date');
-                }
+                const canonical = this.canonicalizeDate(deadline);
                 updates.push('deadline = ?');
-                params.push(deadline);
+                params.push(canonical);
             } else {
                 updates.push('deadline = NULL');
             }
@@ -1316,7 +1341,8 @@ class BackendServices {
         if (!manager || manager.role !== 'manager' || Number(manager.organizationId || 0) !== Number(task.organizationId || 0) || !(await this.canManageOrganization(managerId, task.organizationId)) || (Number(task.createdBy) !== Number(managerId) && !(task.organizationId && await this.isOrganizationAdmin(managerId, task.organizationId)))) throw new ApiError(403, 'Only the task manager can add subtasks.');
         const worker = await this.data.get('SELECT role,organizationId FROM users WHERE id=?', [assignedTo]);
         if (!worker || worker.role !== 'worker' || Number(worker.organizationId || 0) !== Number(task.organizationId || 0)) throw new ApiError(403, 'Choose a worker in the same organization.');
-        const result = await this.data.run(`INSERT INTO subtasks (parentTaskId,title,description,assignedTo,createdBy,organizationId,dueDate,priority,weight,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [parentTaskId,title,String(payload.description||'').slice(0,2000),assignedTo,managerId,task.organizationId,payload.dueDate||null,String(payload.priority||'normal').slice(0,30),weight,Date.now(),Date.now()]);
+        const canonicalDueDate = payload.dueDate ? this.canonicalizeDate(payload.dueDate) : null;
+        const result = await this.data.run(`INSERT INTO subtasks (parentTaskId,title,description,assignedTo,createdBy,organizationId,dueDate,priority,weight,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [parentTaskId,title,String(payload.description||'').slice(0,2000),assignedTo,managerId,task.organizationId,canonicalDueDate,String(payload.priority||'normal').slice(0,30),weight,Date.now(),Date.now()]);
         return { id: result.lastID, status: 'in_progress' };
     }
 
@@ -1877,15 +1903,18 @@ class BackendServices {
                 params.push(status);
             }
             if (overdueOnly) {
-                sql += " AND t.status != 'completed' AND t.deadline < ?";
-                params.push(Date.now());
+                sql += " AND lower(t.status) != 'completed' AND t.deadline IS NOT NULL AND t.deadline != ''";
             }
             if (search) {
                 sql += ' AND (t.title LIKE ? OR t.description LIKE ?)';
                 params.push('%' + search + '%', '%' + search + '%');
             }
             sql += ' ORDER BY t.id DESC LIMIT 25';
-            return await this.data.all(sql, params);
+            let rows = await this.data.all(sql, params);
+            if (overdueOnly) {
+                rows = rows.filter(r => this.isDeadlineOverdue(r.deadline));
+            }
+            return rows;
         };
 
         const executeSummarizeProject = async ({ targetProjectId } = {}) => {
@@ -1897,10 +1926,9 @@ class BackendServices {
             }
             const tasks = await this.data.all('SELECT status, deadline, progress FROM tasks WHERE projectId = ?', [pId]);
             const total = tasks.length;
-            const completed = tasks.filter(t => t.status === 'completed').length;
-            const inProgress = tasks.filter(t => t.status === 'in_progress').length;
-            const now = Date.now();
-            const overdue = tasks.filter(t => t.status !== 'completed' && t.deadline < now).length;
+            const completed = tasks.filter(t => String(t.status).toLowerCase() === 'completed').length;
+            const inProgress = tasks.filter(t => ['in_progress', 'in progress'].includes(String(t.status).toLowerCase())).length;
+            const overdue = tasks.filter(t => String(t.status).toLowerCase() !== 'completed' && this.isDeadlineOverdue(t.deadline)).length;
             const avgProgress = total > 0 ? Math.round(tasks.reduce((acc, t) => acc + (t.progress || 0), 0) / total) : 0;
             return {
                 projectName: p.name,
@@ -2079,31 +2107,42 @@ class BackendServices {
         const orgId = user.organizationId;
         if (!orgId) throw new ApiError(400, 'User does not belong to an organization');
 
-        const sql = `
-            SELECT p.id, p.name, p.status, p.progress,
-                   COUNT(t.id) AS totalTasks,
-                   SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completedTasks,
-                   SUM(CASE WHEN t.deadline < ? AND t.status != 'completed' THEN 1 ELSE 0 END) AS overdueTasks
+        const projects = await this.data.all(`
+            SELECT p.id, p.name, p.status, p.progress
             FROM projects p
-            LEFT JOIN tasks t ON t.projectId = p.id
             WHERE p.organizationId = ?
-            GROUP BY p.id
             ORDER BY p.name COLLATE NOCASE
-        `;
+        `, [orgId]);
+
+        const allTasks = await this.data.all(`
+            SELECT t.projectId, t.status, t.deadline
+            FROM tasks t
+            JOIN projects p ON p.id = t.projectId
+            WHERE p.organizationId = ?
+        `, [orgId]);
+
+        const tasksByProject = new Map();
+        for (const t of allTasks) {
+            if (!tasksByProject.has(t.projectId)) tasksByProject.set(t.projectId, []);
+            tasksByProject.get(t.projectId).push(t);
+        }
 
         stream.write('\uFEFF');
         stream.write(formatCsvRow(['Project ID', 'Name', 'Status', 'Progress (%)', 'Total Tasks', 'Completed Tasks', 'Overdue Tasks']));
 
-        const rows = await this.data.all(sql, [Date.now(), orgId]);
-        for (const r of rows) {
+        for (const p of projects) {
+            const pTasks = tasksByProject.get(p.id) || [];
+            const totalTasks = pTasks.length;
+            const completedTasks = pTasks.filter(t => String(t.status).toLowerCase() === 'completed').length;
+            const overdueTasks = pTasks.filter(t => String(t.status).toLowerCase() !== 'completed' && this.isDeadlineOverdue(t.deadline)).length;
             stream.write(formatCsvRow([
-                r.id,
-                r.name,
-                r.status,
-                r.progress || 0,
-                r.totalTasks || 0,
-                r.completedTasks || 0,
-                r.overdueTasks || 0
+                p.id,
+                p.name,
+                p.status,
+                p.progress || 0,
+                totalTasks,
+                completedTasks,
+                overdueTasks
             ]));
         }
         stream.end();
@@ -2155,10 +2194,9 @@ class BackendServices {
         const orgName = org ? org.name : 'Government Entity';
 
         const totalTasks = tasks.length;
-        const completedTasks = tasks.filter(t => t.status === 'completed').length;
-        const inProgressTasks = tasks.filter(t => t.status === 'in_progress' || t.status === 'In Progress').length;
-        const now = Date.now();
-        const overdueTasks = tasks.filter(t => t.status !== 'completed' && t.deadline && Number(t.deadline) < now).length;
+        const completedTasks = tasks.filter(t => String(t.status).toLowerCase() === 'completed').length;
+        const inProgressTasks = tasks.filter(t => ['in_progress', 'in progress'].includes(String(t.status).toLowerCase())).length;
+        const overdueTasks = tasks.filter(t => String(t.status).toLowerCase() !== 'completed' && this.isDeadlineOverdue(t.deadline)).length;
 
         const doc = new PDFDocument({ margin: 40, size: 'A4' });
         doc.pipe(stream);
@@ -2516,11 +2554,9 @@ class BackendServices {
             sql += ' ORDER BY t.id DESC LIMIT 20';
             let rows = await this.data.all(sql, params);
             if (overdueOnly) {
-                const now = Date.now();
                 rows = rows.filter(r => {
-                    if (!r.deadline || r.status === 'Completed') return false;
-                    const dTime = isNaN(Number(r.deadline)) ? new Date(r.deadline).getTime() : Number(r.deadline);
-                    return dTime < now;
+                    if (!r.deadline || String(r.status).toLowerCase() === 'completed') return false;
+                    return this.isDeadlineOverdue(r.deadline);
                 });
             }
             return rows;
@@ -2535,11 +2571,9 @@ class BackendServices {
             const totalTasks = tasks.length;
             const completedTasks = tasks.filter(t => t.status === 'Completed').length;
             const inProgressTasks = tasks.filter(t => t.status === 'In Progress').length;
-            const now = Date.now();
             const overdueTasks = tasks.filter(t => {
-                if (!t.deadline || t.status === 'Completed') return false;
-                const dTime = isNaN(Number(t.deadline)) ? new Date(t.deadline).getTime() : Number(t.deadline);
-                return dTime < now;
+                if (!t.deadline || String(t.status).toLowerCase() === 'completed') return false;
+                return this.isDeadlineOverdue(t.deadline);
             }).length;
             const avgProgress = totalTasks ? Math.round(tasks.reduce((sum, t) => sum + (Number(t.progress) || 0), 0) / totalTasks) : 0;
             return {
