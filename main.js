@@ -797,7 +797,9 @@ const routes = {
                 logoutBtn.addEventListener('click', async () => {
                     await store.logout();
                     currentUser = null;
-    
+                    if (router && typeof router.clearScrollPositions === 'function') {
+                        router.clearScrollPositions();
+                    }
                     updateAuthUI();
                     toast.info('You have been logged out.');
                     window.location.hash = '#/';
