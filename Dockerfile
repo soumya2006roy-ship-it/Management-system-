@@ -13,6 +13,8 @@ COPY --chown=node:node package.json ./
 COPY --chown=node:node *.js ./
 COPY --chown=node:node *.html *.css *.png ./
 COPY --chown=node:node migrations ./migrations
+COPY --chown=node:node services ./services
+COPY --chown=node:node public ./public
 RUN mkdir -p /data && chown node:node /data
 VOLUME ["/data"]
 EXPOSE 3000
