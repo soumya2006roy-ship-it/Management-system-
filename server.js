@@ -1,3 +1,4 @@
+process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || '16';
 const express = require('express');
 const path = require('path');
 const { loadConfig } = require('./config');

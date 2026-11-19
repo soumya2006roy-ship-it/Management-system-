@@ -26,7 +26,7 @@ async function run() {
     console.log('\n--- Test 1: Catalog Seeding and Provenance ---');
     const schemes = await services.getGovernmentSchemes();
     assert.ok(Array.isArray(schemes), 'getGovernmentSchemes must return an array');
-    assert.strictEqual(schemes.length, 3, 'Must seed exactly 3 verified government schemes');
+    assert.ok(schemes.length >= 15, 'Must seed at least 15 verified government schemes');
     for (const s of schemes) {
         assert.ok(s.title, 'Scheme must have title');
         assert.ok(s.ministry, 'Scheme must have ministry');
@@ -70,6 +70,12 @@ async function run() {
     assert.strictEqual(droneEval.matchScore, 100, 'Matching drone project should score 100');
     assert.ok(droneEval.matchReason.includes('Progress Milestone Threshold'));
     assert.ok(droneEval.matchReason.includes('Sector & Organizational Synergy'));
+
+    // Test PROD-01: Casual/recreational project must fail sector synergy and score <= 65%
+    const picnicProject = { id: 3, name: 'Drone photo of company picnic', progress: 50, status: 'In Progress' };
+    const picnicEval = services.calculateSchemeMatch(picnicProject, pliScheme, 5, { name: 'Acme Media', type: 'Advertising' });
+    assert.ok(picnicEval.matchScore <= 65, `Casual picnic project must score <= 65% (actual: ${picnicEval.matchScore})`);
+    assert.strictEqual(picnicEval.rules.find(r => r.rule === 'sector_alignment').matched, false, 'Sector alignment must fail for casual activities');
     console.log('[PASS] Rule-based matcher accurately evaluates rules, weights, and unknown criteria.');
 
     // -------------------------------------------------------------
@@ -123,7 +129,7 @@ async function run() {
 
     // Test 3.4: Legitimate member of Org A querying Project A -> Success
     const orgASchemes = await services.getSchemesForProject(mgrAId, projAId);
-    assert.strictEqual(orgASchemes.length, 3);
+    assert.strictEqual(orgASchemes.length, schemes.length);
     assert.ok(orgASchemes[0].matchScore > 0);
     assert.strictEqual(orgASchemes[0].applicationStatus, 'recommended');
     console.log('[PASS] Tenant scoping verified: missing org, null tenant, and cross-org access strictly blocked.');
@@ -256,7 +262,7 @@ async function run() {
     assert.strictEqual(ingestResult.ingested[0].action, 'inserted');
 
     const allSchemesAfterIngest = await services.getGovernmentSchemes();
-    assert.strictEqual(allSchemesAfterIngest.length, 4, 'Catalog count should increase to 4 after ingest');
+    assert.strictEqual(allSchemesAfterIngest.length, schemes.length + 1, 'Catalog count should increase by 1 after ingest');
     const greenHydrogen = allSchemesAfterIngest.find(s => s.title.includes('Green Hydrogen'));
     assert.ok(greenHydrogen, 'Ingested scheme must exist in catalog');
 

@@ -546,8 +546,8 @@ function registerApiRoutes(app, services) {
         try {
             const projectId = Number(req.params.id);
             const schemeId = Number(req.params.schemeId);
-            const { criterionKey, status } = req.body || {};
-            const result = await services.updateSchemeReadiness(req.user.id, projectId, schemeId, criterionKey, status);
+            const { criterionKey, status, documentRef } = req.body || {};
+            const result = await services.updateSchemeReadiness(req.user.id, projectId, schemeId, criterionKey, status, documentRef);
             res.json(result);
         } catch (error) {
             handleError(res, error);

@@ -58,7 +58,25 @@ class DataStore {
             headers['X-CSRF-Token'] = this.csrfToken;
             headers['X-Orion-Request'] = '1';
         }
-        return fetch(url, { ...options, method, headers, credentials: 'include' });
+
+        try {
+            const response = await fetch(url, { ...options, method, headers, credentials: 'include' });
+            if (typeof document !== 'undefined') {
+                const banner = document.getElementById('network-status-banner');
+                if (banner && banner.style.display !== 'none') {
+                    banner.style.display = 'none';
+                }
+            }
+            return response;
+        } catch (netErr) {
+            if (typeof document !== 'undefined') {
+                const banner = document.getElementById('network-status-banner');
+                if (banner) {
+                    banner.style.display = 'block';
+                }
+            }
+            throw netErr;
+        }
     }
 
     async login(username, password) {
@@ -542,15 +560,26 @@ class DataStore {
         return parseJsonSafe(res, 'Failed to apply for government scheme');
     }
 
-    async updateSchemeReadiness(projectId, schemeId, criterionKey, status) {
+    async updateSchemeReadiness(projectId, schemeId, criterionKey, status, documentRef = '') {
         const res = await this.request(`${API_URL}/projects/${projectId}/schemes/${schemeId}/readiness`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ criterionKey, status })
+            body: JSON.stringify({ criterionKey, status, documentRef })
         });
         return parseJsonSafe(res, 'Failed to update compliance readiness');
     }
 
+}
+
+if (typeof window !== 'undefined') {
+    const updateNetworkStatus = (isOffline) => {
+        const banner = document.getElementById('network-status-banner');
+        if (banner) {
+            banner.style.display = isOffline ? 'block' : 'none';
+        }
+    };
+    window.addEventListener('offline', () => updateNetworkStatus(true));
+    window.addEventListener('online', () => updateNetworkStatus(false));
 }
 
 export const store = new DataStore();

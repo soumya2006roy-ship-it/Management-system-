@@ -7,6 +7,7 @@ FROM node:22-trixie-slim AS runtime
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV ORION_DB_PATH=/data/orion.db
+ENV UV_THREADPOOL_SIZE=16
 WORKDIR /app
 COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json ./

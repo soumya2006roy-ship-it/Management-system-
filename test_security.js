@@ -309,6 +309,27 @@ async function run() {
     const serverJsContent = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
     assert.ok(serverJsContent.includes("'Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS'"), 'server.js must allow PATCH and DELETE in CORS preflight');
 
+    // --- Regression Test: SEC-03 Bounded Session Cache with Strict Invalidation ---
+    const cacheUserToken = await secServices.createSession(secWorker.id);
+    secServices.sessionCache.clear();
+
+    // First lookup: cache miss, loads from DB and caches
+    const uid1 = await secServices.getUserIdByToken(cacheUserToken);
+    assert.strictEqual(uid1, secWorker.id);
+    assert.strictEqual(secServices.sessionCache.misses, 1);
+    assert.strictEqual(secServices.sessionCache.hits, 0);
+
+    // Second lookup: cache hit, zero DB query
+    const uid2 = await secServices.getUserIdByToken(cacheUserToken);
+    assert.strictEqual(uid2, secWorker.id);
+    assert.strictEqual(secServices.sessionCache.hits, 1);
+
+    // Invalidation on logout:
+    await secServices.destroySession(cacheUserToken);
+    assert.strictEqual(secServices.sessionCache.size(), 0, 'Session cache must be evicted immediately on destroySession');
+    const uid3 = await secServices.getUserIdByToken(cacheUserToken);
+    assert.strictEqual(uid3, null, 'Revoked session must return null');
+
     await secData.close();
 
     console.log('Security unit tests passed.');

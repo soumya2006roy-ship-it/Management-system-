@@ -557,27 +557,31 @@ const routes = {
                     } catch (err) {
                         showToast(err.message || 'Failed to record tracking', 'error');
                         e.currentTarget.disabled = false;
-                        e.currentTarget.textContent = 'Track & Open Official Portal ↗';
+                        e.currentTarget.textContent = 'Mark Tracked & Open Official Portal ↗';
                     }
                 });
             });
 
             document.querySelectorAll('.scheme-readiness-select').forEach((select) => {
                 select.addEventListener('change', async (e) => {
-                    const projId = e.target.dataset.projectId;
-                    const schemeId = e.target.dataset.schemeId;
-                    const criterionKey = e.target.dataset.criterionKey;
-                    const newStatus = e.target.value;
-                    e.target.disabled = true;
+                    const sel = e.target;
+                    const projId = sel.dataset.projectId;
+                    const schemeId = sel.dataset.schemeId;
+                    const criterionKey = sel.dataset.criterionKey;
+                    const newStatus = sel.value;
+                    sel.disabled = true;
 
                     try {
                         await store.updateSchemeReadiness(projId, schemeId, criterionKey, newStatus);
                         showToast('Compliance readiness updated');
-                        evaluatedSchemes = await store.getProjectSchemes(projId);
-                        await renderSchemesPage();
+                        sel.disabled = false;
+                        // Localized DOM update: update background evaluatedSchemes cache without destroying DOM state
+                        store.getProjectSchemes(projId).then((updated) => {
+                            evaluatedSchemes = updated;
+                        }).catch(() => {});
                     } catch (err) {
                         showToast(err.message || 'Failed to update readiness', 'error');
-                        e.target.disabled = false;
+                        sel.disabled = false;
                     }
                 });
             });
@@ -832,6 +836,9 @@ const routes = {
             const logoutBtn = document.getElementById('logout-btn');
             if (logoutBtn) {
                 logoutBtn.addEventListener('click', async () => {
+                    if (currentUser) {
+                        try { sessionStorage.removeItem(`orion_ai_history_${currentUser.id}`); } catch (_e) {}
+                    }
                     await store.logout();
                     currentUser = null;
                     if (router && typeof router.clearScrollPositions === 'function') {
@@ -1665,6 +1672,62 @@ function setupRegisterPage() {
         });
     }
 
+    function debounce(fn, ms = 250) {
+        let timer;
+        return (...args) => {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn(...args), ms);
+        };
+    }
+
+    const nameInput = regForm.elements.namedItem('name');
+    if (nameInput) {
+        nameInput.addEventListener('input', debounce(() => {
+            const val = String(nameInput.value || '').trim();
+            const errEl = document.getElementById('error-name');
+            const msg = !val ? 'Enter your full name.' : '';
+            nameInput.setAttribute('aria-invalid', msg ? 'true' : 'false');
+            if (errEl) errEl.textContent = msg;
+        }, 250));
+    }
+
+    if (emailInput) {
+        emailInput.addEventListener('input', debounce(() => {
+            const val = String(emailInput.value || '').trim();
+            const errEl = document.getElementById('error-username');
+            let msg = '';
+            if (!val) msg = 'Enter your email address.';
+            else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) msg = 'Enter a valid email address.';
+            emailInput.setAttribute('aria-invalid', msg ? 'true' : 'false');
+            if (errEl) errEl.textContent = msg;
+        }, 250));
+    }
+
+    if (passwordInput) {
+        passwordInput.addEventListener('input', debounce(() => {
+            const val = String(passwordInput.value || '');
+            const errEl = document.getElementById('error-password');
+            let msg = '';
+            if (!val) msg = 'Enter a password.';
+            else if (val.length < 8) msg = 'Use at least 8 characters.';
+            passwordInput.setAttribute('aria-invalid', msg ? 'true' : 'false');
+            if (errEl) errEl.textContent = msg;
+        }, 250));
+    }
+
+    if (confirmInput) {
+        confirmInput.addEventListener('input', debounce(() => {
+            const val = String(confirmInput.value || '');
+            const passVal = String(passwordInput ? passwordInput.value : '');
+            const errEl = document.getElementById('error-confirmPassword');
+            let msg = '';
+            if (!val) msg = 'Confirm your password.';
+            else if (val !== passVal) msg = 'Passwords do not match.';
+            confirmInput.setAttribute('aria-invalid', msg ? 'true' : 'false');
+            if (errEl) errEl.textContent = msg;
+        }, 250));
+    }
+
     regForm.addEventListener('submit', async (ev) => {
         ev.preventDefault();
         const btn = regForm.querySelector('button[type="submit"]');
@@ -1820,6 +1883,43 @@ function setupAiAssistant() {
         return;
     }
 
+    const getStorageKey = () => currentUser ? `orion_ai_history_${currentUser.id}` : null;
+
+    const saveHistory = () => {
+        const key = getStorageKey();
+        if (!key) return;
+        try {
+            const messages = [];
+            feed.querySelectorAll('.ai-help-msg').forEach((el) => {
+                const who = el.classList.contains('ai-help-msg-user') ? 'user' : 'bot';
+                messages.push({ who, html: el.innerHTML });
+            });
+            sessionStorage.setItem(key, JSON.stringify(messages.slice(-30)));
+        } catch (_e) {}
+    };
+
+    const loadHistory = () => {
+        const key = getStorageKey();
+        if (!key) return;
+        try {
+            const raw = sessionStorage.getItem(key);
+            if (!raw) return;
+            const messages = JSON.parse(raw);
+            if (Array.isArray(messages) && messages.length > 0) {
+                feed.innerHTML = '';
+                for (const m of messages) {
+                    const row = document.createElement('div');
+                    row.className = `ai-help-msg ai-help-msg-${m.who}`;
+                    row.innerHTML = m.html;
+                    feed.appendChild(row);
+                }
+                feed.scrollTop = feed.scrollHeight;
+            }
+        } catch (_e) {}
+    };
+
+    loadHistory();
+
     const formatMessageText = (text) => {
         if (!text) return '';
         // Escape HTML
@@ -1852,6 +1952,7 @@ function setupAiAssistant() {
             row.style.transform = 'translateY(0)';
         });
         feed.scrollTop = feed.scrollHeight;
+        saveHistory();
         return row;
     };
 
@@ -1965,6 +2066,7 @@ function setupAiAssistant() {
             if (messageRow) {
                 messageRow.innerHTML = formatMessageText(res.text || streamedText) + ' ' + modeBadge;
                 feed.scrollTop = feed.scrollHeight;
+                saveHistory();
             }
             if (res && res.proposal) {
                 appendActionCard(res.proposal);

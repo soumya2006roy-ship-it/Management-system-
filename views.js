@@ -962,7 +962,7 @@ export const Views = {
         <div class="main-container" style="padding-top: 2rem; padding-bottom: 4rem;">
             <header class="page-heading">
                 <p class="page-eyebrow">NATIONAL PRODUCTIVITY &amp; SUBSIDY INITIATIVES</p>
-                <h1>Government Schemes &amp; Subsidies</h1>
+                <h1>Scheme Eligibility Pre-Check &amp; Compliance Tracker</h1>
                 <p class="page-lead">Match your organization's projects with verified national grants, PLI subsidies, and deep-tech policy incentives.</p>
             </header>
 
@@ -1061,8 +1061,8 @@ export const Views = {
                                             <div style="margin-top: 0.75rem; padding-top: 0.65rem; border-top: 1px dashed var(--border); font-size: 0.75rem;">
                                                 <div style="font-weight: 600; text-transform: uppercase; margin-bottom: 0.4rem; color: var(--text-muted);">Compliance &amp; Audit Readiness:</div>
                                                 ${s.unknownCriteria.map(u => {
-                                                    const statusLabel = u.status === 'verified' ? '✓ Verified' : u.status === 'in_progress' ? '⏳ In Progress' : '⚠️ Pending';
-                                                    const statusColor = u.status === 'verified' ? 'var(--success, #10b981)' : u.status === 'in_progress' ? 'var(--warning, #f59e0b)' : 'var(--text-muted, #94a3b8)';
+                                                    const statusLabel = u.status === 'verified' ? '✓ Verified' : u.status === 'self_verified' ? '✓ Self-Verified' : u.status === 'in_progress' ? '⏳ In Progress' : u.status === 'missing' ? '❌ Missing' : '⚠️ Pending';
+                                                    const statusColor = (u.status === 'verified' || u.status === 'self_verified') ? 'var(--success, #10b981)' : u.status === 'in_progress' ? 'var(--warning, #f59e0b)' : u.status === 'missing' ? 'var(--danger, #ef4444)' : 'var(--text-muted, #94a3b8)';
                                                     return `
                                                         <div style="margin-bottom: 0.5rem; padding: 0.45rem 0.6rem; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border);">
                                                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; gap: 0.5rem; flex-wrap: wrap;">
@@ -1071,7 +1071,9 @@ export const Views = {
                                                                     <select class="form-input form-input-sm scheme-readiness-select" data-project-id="${escapeHtml(selectedProjectId)}" data-scheme-id="${escapeHtml(s.id)}" data-criterion-key="${escapeHtml(u.criterionKey || '')}" style="font-size: 0.75rem; padding: 2px 6px; width: auto; height: auto;">
                                                                         <option value="pending" ${u.status === 'pending' || u.status === 'unknown' ? 'selected' : ''}>Pending</option>
                                                                         <option value="in_progress" ${u.status === 'in_progress' ? 'selected' : ''}>In Progress</option>
+                                                                        <option value="self_verified" ${u.status === 'self_verified' ? 'selected' : ''}>Self-Verified</option>
                                                                         <option value="verified" ${u.status === 'verified' ? 'selected' : ''}>Verified</option>
+                                                                        <option value="missing" ${u.status === 'missing' ? 'selected' : ''}>Missing</option>
                                                                     </select>
                                                                 ` : `
                                                                     <span style="color: ${statusColor}; font-weight: 600; font-size: 0.75rem;">${statusLabel}</span>
@@ -1095,7 +1097,7 @@ export const Views = {
                                             <span class="status-pill status-pill--complete" style="font-weight: 600;">✓ TRACKED (PORTAL ACTIVE)</span>
                                         ` : canApply ? `
                                             <button class="btn btn-primary btn-sm apply-scheme-btn" data-project-id="${escapeHtml(selectedProjectId)}" data-scheme-id="${escapeHtml(s.id)}" data-portal-url="${escapeHtml(s.portalUrl || '')}">
-                                                Track &amp; Open Official Portal ↗
+                                                Mark Tracked &amp; Open Official Portal ↗
                                             </button>
                                         ` : `
                                             <span style="font-size: 0.75rem; color: var(--text-muted);">Manager required to track</span>

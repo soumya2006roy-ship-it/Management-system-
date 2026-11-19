@@ -207,22 +207,16 @@ ORION utilizes SQLite 3 with Write-Ahead Logging (WAL) for high-performance conc
 - `PRAGMA foreign_keys = ON`
 
 ### Single-Instance Limitation
-> **Architectural Constraint**: SQLite is designed for a single application process accessing a local or volume-mounted database file. Running multiple concurrent Node.js processes against the same SQLite database file across multiple hosts or horizontal containers will cause database lock contention (`SQLITE_BUSY`).
->
-> For multi-node horizontal autoscaling deployments, the database layer should be migrated to PostgreSQL or another client-server relational database.
+### Production Scaling & Single-Replica Constraint (`ARCH-01`)
 
-### PostgreSQL Migration Roadmap
-To scale ORION beyond a single instance, follow this 4-step migration roadmap:
-1. **Repository Layer Isolation (`ARCH-01`)**: Decouple database interactions from `backend_services.js` into domain repositories (`ProjectRepository`, `TaskRepository`, `UserRepository`, `SchemeRepository`).
-2. **Database Adapter Abstraction**: Introduce a unified `DatabaseClient` interface that switches between `sqlite3` and `pg` connection pool based on `DATABASE_URL` (e.g. `postgres://user:pass@host:5432/orion`).
-3. **DDL & Schema Translation**:
-   - Convert `INTEGER PRIMARY KEY AUTOINCREMENT` to `BIGSERIAL PRIMARY KEY`.
-   - Convert millisecond integer timestamps to `TIMESTAMPTZ`.
-   - Retain `ON CONFLICT (...) DO UPDATE` syntax (supported identically in PostgreSQL 9.5+).
-   - Configure PostgreSQL connection pooling (`max: 20`, `idleTimeoutMillis: 30000`).
-4. **Data Transition Script**:
-   - Execute sequential migrations (`001` through `007`) in PostgreSQL.
-   - Run an offline ETL script to stream rows from SQLite into PostgreSQL with sequence identity resets (`SELECT setval(...)`).
+> **CRITICAL ARCHITECTURAL REQUIREMENT**: In its default configuration, ORION uses an embedded SQLite database running in Write-Ahead Logging (WAL) mode with an in-process serialized transaction queue (`_txQueue`). 
+> 
+> **SQLite is strictly constrained to a single active replica**. Mounting a single SQLite file across multiple container pods over networked filesystems (NFS, SMB, CIFS, EFS) violates POSIX byte-range locking, causing `SQLITE_BUSY` deadlocks and unrecoverable database corruption.
+
+For enterprise deployments requiring multi-pod horizontal scaling, zero-downtime rolling deploys, and distributed session states:
+1. **Container Deployment**: Use `docker-compose.yml` to boot the application with `UV_THREADPOOL_SIZE=16`, volume-mounted local persistence, and built-in HTTP healthchecks.
+2. **PostgreSQL 16 Migration Blueprint**: See [`docs/POSTGRES_MIGRATION.md`](docs/POSTGRES_MIGRATION.md) for the complete multi-pod architecture blueprint, PgBouncer pooling, row-level locking (`SELECT ... FOR UPDATE`), and Redis cluster integration.
+3. **Enterprise DDL Migration**: Execute [`migrations/postgres/001_initial_schema.sql`](migrations/postgres/001_initial_schema.sql) on target PostgreSQL 16 instances for complete 64-bit sequence addressing, check constraints, and index parity.
 
 ### Backups and Restores
 - `npm run backup`: Flushes the WAL log (`PRAGMA wal_checkpoint(TRUNCATE)`) and creates an atomic snapshot in `backups/`.

@@ -418,6 +418,34 @@ async function run() {
         });
         assert.strictEqual(adminDeleted.success, true);
 
+        console.log('--- Test 11: Project Progress Recalculation on Create and Delete Task ---');
+        const projTest = await services.createProject({ name: 'Progress Recalc Project', creatorId: manager1.id });
+        const taskP1 = await services.createTask({
+            projectId: projTest.id,
+            title: 'Task P1',
+            assignedTo: worker1.id,
+            createdBy: manager1.id
+        });
+        await services.updateTask({ taskId: taskP1.id, progress: 100, status: 'Completed', requesterId: manager1.id });
+        let projRow = await data.get('SELECT progress, status FROM projects WHERE id = ?', [projTest.id]);
+        assert.strictEqual(projRow.progress, 100, 'Project progress must be 100% when its only task is completed');
+
+        // Create 2nd task with 0% progress -> project progress must immediately recalculate to 50%
+        const taskP2 = await services.createTask({
+            projectId: projTest.id,
+            title: 'Task P2',
+            assignedTo: worker1.id,
+            createdBy: manager1.id
+        });
+        projRow = await data.get('SELECT progress, status FROM projects WHERE id = ?', [projTest.id]);
+        assert.strictEqual(projRow.progress, 50, 'Project progress must recalculate to 50% when a new task is added');
+
+        // Delete 2nd task -> project progress must recalculate back to 100%
+        await services.deleteTask({ taskId: taskP2.id, requesterId: manager1.id });
+        projRow = await data.get('SELECT progress, status FROM projects WHERE id = ?', [projTest.id]);
+        assert.strictEqual(projRow.progress, 100, 'Project progress must recalculate back to 100% upon task deletion');
+        console.log('[PASS] Project progress dynamically recalculates on task creation and deletion.');
+
         console.log('ALL TASK CRUD TESTS PASSED!');
     } finally {
         await data.close();

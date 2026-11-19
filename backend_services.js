@@ -15,9 +15,81 @@ const { SchemesService } = require('./services/schemes_service');
 
 const USER_PUBLIC_FIELDS = 'id, username, name, role, organizationId';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const ALLOWED_TASK_STATUSES = Object.freeze(['In Planning', 'In Progress', 'Completed', 'Blocked', 'Cancelled']);
+const ALLOWED_PROJECT_STATUSES = Object.freeze(['In Planning', 'In Progress', 'Completed', 'On Hold', 'Archived']);
 
 function sessionHash(token) {
     return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+class SessionCache {
+    constructor(maxEntries = 2000, ttlMs = 45000) {
+        this.maxEntries = maxEntries;
+        this.ttlMs = ttlMs;
+        this.cache = new Map();
+        this.hits = 0;
+        this.misses = 0;
+    }
+
+    get(tokenHash) {
+        if (!tokenHash) return null;
+        const entry = this.cache.get(tokenHash);
+        if (!entry) {
+            this.misses++;
+            return null;
+        }
+        const now = Date.now();
+        if (entry.expiresAt <= now || (now - entry.cachedAt) > this.ttlMs) {
+            this.cache.delete(tokenHash);
+            this.misses++;
+            return null;
+        }
+        // Refresh LRU order
+        this.cache.delete(tokenHash);
+        this.cache.set(tokenHash, entry);
+        this.hits++;
+        return entry.userId;
+    }
+
+    set(tokenHash, userId, expiresAt) {
+        if (!tokenHash) return;
+        if (this.cache.size >= this.maxEntries) {
+            const oldestKey = this.cache.keys().next().value;
+            if (oldestKey !== undefined) {
+                this.cache.delete(oldestKey);
+            }
+        }
+        this.cache.set(tokenHash, {
+            userId: Number(userId),
+            expiresAt: Number(expiresAt),
+            cachedAt: Date.now()
+        });
+    }
+
+    delete(tokenHash) {
+        if (!tokenHash) return;
+        this.cache.delete(tokenHash);
+    }
+
+    invalidateUser(userId) {
+        if (!userId) return;
+        const targetId = Number(userId);
+        for (const [key, entry] of this.cache.entries()) {
+            if (entry.userId === targetId) {
+                this.cache.delete(key);
+            }
+        }
+    }
+
+    clear() {
+        this.cache.clear();
+        this.hits = 0;
+        this.misses = 0;
+    }
+
+    size() {
+        return this.cache.size;
+    }
 }
 
 class ApiError extends Error {
@@ -36,31 +108,48 @@ class BackendServices {
         this.ApiError = ApiError;
         this.exportService = new ExportService(this.data, this);
         this.schemesService = new SchemesService(this.data, this);
+        this.sessionCache = this.data && this.data.sessionCache ? this.data.sessionCache : new SessionCache(2000, 45000);
+        if (this.data) this.data.sessionCache = this.sessionCache;
     }
 
     async createSession(userId) {
         const token = crypto.randomBytes(32).toString('hex');
+        const hash = sessionHash(token);
+        const expiresAt = Date.now() + SESSION_TTL_MS;
         await this.data.deleteExpiredSessions();
-        await this.data.createSession(sessionHash(token), Number(userId), Date.now() + SESSION_TTL_MS);
+        await this.data.createSession(hash, Number(userId), expiresAt);
+        this.sessionCache.set(hash, Number(userId), expiresAt);
         return token;
     }
 
     async getUserIdByToken(token) {
         if (!token) return null;
-        const session = await this.data.getSession(sessionHash(token));
+        const hash = sessionHash(token);
+        const cached = this.sessionCache.get(hash);
+        if (cached !== null) {
+            return cached;
+        }
+        const session = await this.data.getSession(hash);
         if (!session) return null;
         if (session.expiresAt <= Date.now()) {
-            await this.data.deleteSession(sessionHash(token));
+            this.sessionCache.delete(hash);
+            await this.data.deleteSession(hash);
             return null;
         }
+        this.sessionCache.set(hash, session.userId, session.expiresAt);
         return session.userId;
     }
 
     async destroySession(token) {
-        if (token) await this.data.deleteSession(sessionHash(token));
+        if (token) {
+            const hash = sessionHash(token);
+            this.sessionCache.delete(hash);
+            await this.data.deleteSession(hash);
+        }
     }
 
     async clearSessionsForUser(userId) {
+        this.sessionCache.invalidateUser(userId);
         await this.data.deleteSessionsForUser(Number(userId));
     }
 
@@ -823,6 +912,7 @@ class BackendServices {
             "INSERT INTO tasks (projectId, title, assignedTo, createdBy, status, progress, deadline, description, priority) VALUES (?, ?, ?, ?, 'In Progress', 0, ?, ?, ?)",
             [projectId, taskTitle, assignedTo, createdBy, canonicalDeadline, taskDesc, taskPriority]
         );
+        await this.recalculateProjectProgress(projectId);
         this.data.addUpdate(creator.name || 'Manager', `Assigned task "${taskTitle}" to ${worker.name || 'worker'}`, creator.organizationId);
         return { id: result.lastID, success: true };
     }
@@ -840,6 +930,10 @@ class BackendServices {
             projectId
         ]);
         return projectProgress;
+    }
+
+    async calculateProjectProgress(projectId) {
+        return this.recalculateProjectProgress(projectId);
     }
 
     async updateTask({ taskId, id, title, description, status, priority, deadline, progress, requesterId }) {
@@ -1156,6 +1250,7 @@ class BackendServices {
                         "INSERT INTO organization_memberships (userId, organizationId, role, createdAt) VALUES (?, ?, 'admin', ?) ON CONFLICT(userId, organizationId) DO UPDATE SET role = 'admin'",
                         [creatorId, institutionId, Date.now()]
                     );
+                    this.sessionCache.invalidateUser(creatorId);
                 }
             }
 
@@ -1254,6 +1349,7 @@ class BackendServices {
                 }
                 await this.data.run('UPDATE users SET role = \'manager\', organizationId = ? WHERE id = ?', [institutionId, application.applicantId]);
                 await this.data.run("INSERT INTO organization_memberships (userId,organizationId,role,createdAt) VALUES (?,?,'admin',?) ON CONFLICT(userId,organizationId) DO UPDATE SET role='admin'", [application.applicantId, institutionId, Date.now()]);
+                this.sessionCache.invalidateUser(application.applicantId);
             }
             const status = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'more_information_required';
             await this.data.run('UPDATE organization_applications SET status=?, reviewedBy=?, reviewComment=?, reviewedAt=?, institutionId=? WHERE id=?', [status, reviewerId, comment, Date.now(), institutionId, applicationId]);
@@ -1308,6 +1404,7 @@ class BackendServices {
             await this.data.run('UPDATE users SET organizationId = ? WHERE id = ?', [invite.organizationId, userId]);
             await this.data.run("INSERT INTO organization_memberships (userId,organizationId,role,createdAt) VALUES (?,?,'member',?)", [userId, invite.organizationId, Date.now()]);
             await this.data.run("INSERT INTO organization_invite_events (inviteId,actorId,event,createdAt) VALUES (?,?,'redeemed',?)", [invite.id, userId, Date.now()]);
+            this.sessionCache.invalidateUser(userId);
             this.data.addUpdate(user.name || 'Member', `Joined ${organization.name}`, invite.organizationId);
             return { success: true, organization };
         });
@@ -1731,6 +1828,170 @@ class BackendServices {
             };
         }
 
+        // 1. Blocked Tasks query
+        if (lower.includes('blocked')) {
+            const blocked = await this.data.all(`
+                SELECT t.id, t.title, t.status, t.priority, p.name AS projectName, u.name AS assigneeName
+                FROM tasks t
+                JOIN projects p ON p.id = t.projectId
+                LEFT JOIN users u ON u.id = t.assignedTo
+                WHERE p.organizationId = ? AND (LOWER(t.status) = 'blocked' OR LOWER(t.priority) = 'blocked')
+                ORDER BY t.id DESC LIMIT 15
+            `, [user.organizationId]);
+            if (!blocked.length) {
+                return { text: 'No blocked tasks recorded across your organization projects. Workflows are unimpeded.' };
+            }
+            const lines = blocked.map(t => `• **Task #${t.id}**: ${t.title} (Project: ${t.projectName}, Assignee: ${t.assigneeName || 'Unassigned'})`);
+            return {
+                text: 'Here are the currently blocked tasks:\n\n' + lines.join('\n') + '\n\nPlease review dependencies or reassign resources to unblock progress.',
+                tasks: blocked
+            };
+        }
+
+        // 2. High Priority / Urgent Workload query
+        if (lower.includes('urgent') || lower.includes('high priority') || lower.includes('priority workload')) {
+            const urgentTasks = await this.data.all(`
+                SELECT t.id, t.title, t.status, t.priority, t.deadline, p.name AS projectName, u.name AS assigneeName
+                FROM tasks t
+                JOIN projects p ON p.id = t.projectId
+                LEFT JOIN users u ON u.id = t.assignedTo
+                WHERE p.organizationId = ? AND LOWER(t.priority) IN ('urgent', 'high') AND LOWER(t.status) != 'completed'
+                ORDER BY CASE LOWER(t.priority) WHEN 'urgent' THEN 1 ELSE 2 END, t.id DESC LIMIT 15
+            `, [user.organizationId]);
+            if (!urgentTasks.length) {
+                return { text: 'No urgent or high-priority tasks are currently pending in your organization.' };
+            }
+            const lines = urgentTasks.map(t => {
+                const due = t.deadline ? new Date(isNaN(Number(t.deadline)) ? t.deadline : Number(t.deadline)).toLocaleDateString() : 'No deadline';
+                return `• [${t.priority.toUpperCase()}] **Task #${t.id}**: ${t.title} (${t.projectName} · ${t.assigneeName || 'Unassigned'} · Due: ${due})`;
+            });
+            return {
+                text: 'High-priority & urgent active workload:\n\n' + lines.join('\n'),
+                tasks: urgentTasks
+            };
+        }
+
+        // 3. Due within 7 days query
+        if (lower.includes('7 days') || lower.includes('this week') || lower.includes('upcoming deadline') || lower.includes('due soon')) {
+            const now = Date.now();
+            const sevenDays = now + (7 * 86400 * 1000);
+            const dueTasks = await this.data.all(`
+                SELECT t.id, t.title, t.status, t.priority, t.deadline, p.name AS projectName, u.name AS assigneeName
+                FROM tasks t
+                JOIN projects p ON p.id = t.projectId
+                LEFT JOIN users u ON u.id = t.assignedTo
+                WHERE p.organizationId = ? AND LOWER(t.status) != 'completed' AND t.deadline IS NOT NULL
+                ORDER BY t.deadline ASC LIMIT 20
+            `, [user.organizationId]);
+            const filtered = dueTasks.filter(t => {
+                const ms = isNaN(Number(t.deadline)) ? new Date(t.deadline).getTime() : Number(t.deadline);
+                return !isNaN(ms) && ms >= now && ms <= sevenDays;
+            });
+            if (!filtered.length) {
+                return { text: 'No active tasks are due within the next 7 days.' };
+            }
+            const lines = filtered.map(t => {
+                const dateStr = new Date(isNaN(Number(t.deadline)) ? t.deadline : Number(t.deadline)).toLocaleDateString();
+                return `• **Task #${t.id}**: ${t.title} (${t.projectName} · Due: ${dateStr} · Assignee: ${t.assigneeName || 'Unassigned'})`;
+            });
+            return {
+                text: 'Tasks due within the next 7 days:\n\n' + lines.join('\n'),
+                tasks: filtered
+            };
+        }
+
+        // 5. Pending subtask reviews query
+        if (lower.includes('subtask') || lower.includes('pending review') || lower.includes('review pending')) {
+            const pendingSubtasks = await this.data.all(`
+                SELECT s.id, s.title, s.status, s.submissionText, t.title AS taskTitle, u.name AS workerName
+                FROM subtasks s
+                JOIN tasks t ON t.id = s.parentTaskId
+                LEFT JOIN users u ON u.id = s.assignedTo
+                WHERE s.organizationId = ? AND s.status = 'submitted'
+                ORDER BY s.updatedAt DESC LIMIT 15
+            `, [user.organizationId]);
+            if (!pendingSubtasks.length) {
+                return { text: 'No subtask submissions are currently pending manager review.' };
+            }
+            const lines = pendingSubtasks.map(s => `• **Subtask #${s.id}**: ${s.title} (Parent: "${s.taskTitle}", Worker: ${s.workerName || 'Worker'}) — Note: "${s.submissionText || 'Awaiting review'}"`);
+            return {
+                text: 'Subtasks submitted and awaiting manager review:\n\n' + lines.join('\n') + '\n\nManagers can approve or return these from the Task Details view.',
+                subtasks: pendingSubtasks
+            };
+        }
+
+        // 6. Readiness / Compliance Gaps query
+        if (lower.includes('compliance gap') || lower.includes('readiness gap') || lower.includes('unfulfilled criteria') || lower.includes('missing document')) {
+            await this.ensureReadinessTable();
+            const gaps = await this.data.all(`
+                SELECT r.projectId, r.schemeId, r.criterionKey, r.status, p.name AS projectName, s.title AS schemeTitle
+                FROM scheme_compliance_readiness r
+                JOIN projects p ON p.id = r.projectId
+                JOIN government_schemes s ON s.id = r.schemeId
+                WHERE p.organizationId = ? AND r.status IN ('pending', 'missing', 'unknown')
+                ORDER BY r.updatedAt DESC LIMIT 15
+            `, [user.organizationId]);
+            if (!gaps.length) {
+                return { text: 'All tracked scheme compliance readiness items are fulfilled or verified. No compliance gaps found!' };
+            }
+            const lines = gaps.map(g => `• **${g.schemeTitle}** (Project: "${g.projectName}"): Criterion \`${g.criterionKey}\` is currently **${g.status.toUpperCase()}**`);
+            return {
+                text: 'Identified compliance & audit readiness gaps:\n\n' + lines.join('\n') + '\n\nUpload required documentation and self-attest in the Government Schemes tracker.',
+                gaps
+            };
+        }
+
+        // 7. Organization Member Summary query
+        if (lower.includes('member summary') || lower.includes('team roster') || lower.includes('who is on the team') || lower.includes('organization members') || lower.includes('list members')) {
+            const members = await this.data.all(`
+                SELECT name, username, role FROM users WHERE organizationId = ? ORDER BY role, name
+            `, [user.organizationId]);
+            if (!members.length) {
+                return { text: 'No members currently found for this organization.' };
+            }
+            const rolesCount = {};
+            for (const m of members) {
+                rolesCount[m.role] = (rolesCount[m.role] || 0) + 1;
+            }
+            const roleBreakdown = Object.entries(rolesCount).map(([r, c]) => `• **${r}**: ${c}`).join('\n');
+            const lines = members.slice(0, 10).map(m => `• **${m.name}** (\`${m.username}\`) — *${m.role}*`);
+            return {
+                text: `Organization Team Roster (${members.length} members total):\n\n**Role Breakdown:**\n${roleBreakdown}\n\n**Roster Preview:**\n${lines.join('\n')}` + (members.length > 10 ? `\n...and ${members.length - 10} more.` : ''),
+                members
+            };
+        }
+
+        // 8. Export Instructions query
+        if (lower.includes('export instruction') || lower.includes('how to export') || lower.includes('download report') || lower.includes('export csv') || lower.includes('export pdf')) {
+            return {
+                text: '### ORION Cryptographic Export Guide\n\n' +
+                      '• **CSV Exports**: Click **Export CSV** on the Tasks or Projects table. Every export is sanitized against CSV formula injection and includes a deterministic `X-Export-SHA256` HTTP checksum.\n' +
+                      '• **PDF Project Dossiers**: On any project page, click **Export PDF Status Report**. The generated document includes executive milestone summaries, task breakdown, and a tamper-evident SHA-256 watermark box.\n' +
+                      '• **API Endpoints**:\n' +
+                      '  - `GET /api/v1/projects/:id/export/pdf` (Official PDF report)\n' +
+                      '  - `GET /api/v1/export/tasks` (Streamed CSV with BOM & checksum)\n' +
+                      '  - `GET /api/v1/export/projects` and `GET /api/v1/export/members`'
+            };
+        }
+
+        // 9. Recent Activity query
+        if (lower.includes('recent activity') || lower.includes('latest updates') || lower.includes('recent updates') || lower.includes('audit log')) {
+            const updates = await this.data.all(`
+                SELECT author, text, timestamp FROM updates WHERE organizationId = ? ORDER BY id DESC LIMIT 8
+            `, [user.organizationId]);
+            if (!updates.length) {
+                return { text: 'No recent activity recorded for this organization.' };
+            }
+            const lines = updates.map(u => {
+                const dateStr = u.timestamp ? new Date(isNaN(Number(u.timestamp)) ? u.timestamp : Number(u.timestamp)).toLocaleString() : '';
+                return `• **${u.author}**: ${u.text} _(${dateStr})_`;
+            });
+            return {
+                text: 'Recent organization activity & audit log:\n\n' + lines.join('\n'),
+                updates
+            };
+        }
+
         // Check for project progress / summary: e.g. "Summarize project progress" or "Status of Project Alpha"
         if (lower.includes('summarize') || lower.includes('progress') || lower.includes('health') || lower.includes('metrics')) {
             let targetProjId = projectId;
@@ -1773,15 +2034,21 @@ class BackendServices {
             };
         }
 
-        // General assistance & role-specific guidance
-        if (lower.includes('help') || lower.includes('what can you do')) {
+        // 10. Help Menu & Workspace Capabilities
+        if (lower.includes('help') || lower.includes('what can you do') || lower.includes('commands')) {
             return {
-                text: 'I am your ORION Assistant. I can help you:\n' +
-                      '• Check overdue tasks: *"Which tasks are overdue in Project X?"*\n' +
-                      '• Reassign tasks safely: *"Reassign task 12 to Priya"*\n' +
-                      '• Summarize project health: *"Summarize project progress"*\n' +
-                      '• List and filter tasks: *"List tasks in progress"*\n' +
-                      '• Guide you on reports, deadlines, and organization management.'
+                text: '### ORION Intelligence & Automation Capabilities\n\n' +
+                      'I can assist you with 10 workspace-backed intents:\n' +
+                      '1. **Blocked Tasks**: *"Show blocked tasks"*\n' +
+                      '2. **Urgent Workload**: *"List high priority tasks"*\n' +
+                      '3. **Upcoming Deadlines**: *"Tasks due within 7 days"*\n' +
+                      '4. **Project Progress & Health**: *"Summarize project progress"*\n' +
+                      '5. **Subtask Reviews**: *"Show pending subtask reviews"*\n' +
+                      '6. **Government Schemes**: *"Which schemes can we apply for?"*\n' +
+                      '7. **Compliance & Audit Gaps**: *"Check compliance readiness gaps"*\n' +
+                      '8. **Team Roster**: *"Show organization member summary"*\n' +
+                      '9. **Cryptographic Exports**: *"How do I export PDF / CSV reports?"*\n' +
+                      '10. **Recent Activity**: *"Show recent activity updates"*'
             };
         }
 
@@ -2465,8 +2732,8 @@ class BackendServices {
         return this.schemesService.applyForScheme(userId, projectId, schemeId);
     }
 
-    async updateSchemeReadiness(userId, projectId, schemeId, criterionKey, status) {
-        return this.schemesService.updateSchemeReadiness(userId, projectId, schemeId, criterionKey, status);
+    async updateSchemeReadiness(userId, projectId, schemeId, criterionKey, status, documentRef = '') {
+        return this.schemesService.updateSchemeReadiness(userId, projectId, schemeId, criterionKey, status, documentRef);
     }
 
     async ingestSchemesFromFeed(items) {
@@ -2479,4 +2746,4 @@ class BackendServices {
 
 }
 
-module.exports = { BackendServices, ApiError };
+module.exports = { BackendServices, ApiError, ALLOWED_TASK_STATUSES, ALLOWED_PROJECT_STATUSES };

@@ -49,6 +49,17 @@ class BackendData {
     }
 
     run(sql, params = []) {
+        if (this.sessionCache && typeof sql === 'string' && /sessions/i.test(sql)) {
+            if (/update\s+sessions/i.test(sql) || /delete\s+from\s+sessions/i.test(sql)) {
+                for (const p of params) {
+                    if (typeof p === 'string' && p.length === 64) {
+                        this.sessionCache.delete(p);
+                    } else if (typeof p === 'number') {
+                        this.sessionCache.invalidateUser(p);
+                    }
+                }
+            }
+        }
         return new Promise((resolve, reject) => {
             this.db.run(sql, params, function onRun(err) {
                 if (err) {

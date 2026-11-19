@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const PDFDocument = require('pdfkit');
 
 function escapeCsvCell(value) {
@@ -59,14 +60,38 @@ class ExportService {
         }
         sql += ' ORDER BY t.id DESC';
 
+        const allRecords = await this.data.all(sql, params);
+
+        const hasher = crypto.createHash('sha256');
+        hasher.update('\uFEFF');
+        hasher.update(formatCsvRow(['Task ID', 'Title', 'Description', 'Status', 'Priority', 'Progress (%)', 'Assignee', 'Project', 'Deadline']));
+        for (const t of allRecords) {
+            const deadlineFormatted = t.deadline
+                ? new Date(isNaN(Number(t.deadline)) ? t.deadline : Number(t.deadline)).toISOString().split('T')[0]
+                : '';
+            const row = [
+                t.id,
+                t.title,
+                t.description || '',
+                t.status,
+                t.priority || 'normal',
+                t.progress || 0,
+                t.assigneeName || 'Unassigned',
+                t.projectName || '',
+                deadlineFormatted
+            ];
+            hasher.update(formatCsvRow(row));
+        }
+        const digest = hasher.digest('hex');
+        if (typeof stream.setHeader === 'function') {
+            stream.setHeader('X-Export-SHA256', digest);
+        }
+
         stream.write('\uFEFF'); // UTF-8 BOM
         stream.write(formatCsvRow(['Task ID', 'Title', 'Description', 'Status', 'Priority', 'Progress (%)', 'Assignee', 'Project', 'Deadline']));
 
-        let offset = 0;
-        const chunkSize = 500;
-        while (true) {
-            const chunk = await this.data.all(`${sql} LIMIT ? OFFSET ?`, [...params, chunkSize, offset]);
-            if (!chunk.length) break;
+        for (let i = 0; i < allRecords.length; i += 500) {
+            const chunk = allRecords.slice(i, i + 500);
             for (const t of chunk) {
                 const deadlineFormatted = t.deadline
                     ? new Date(isNaN(Number(t.deadline)) ? t.deadline : Number(t.deadline)).toISOString().split('T')[0]
@@ -84,8 +109,6 @@ class ExportService {
                 ];
                 stream.write(formatCsvRow(row));
             }
-            offset += chunk.length;
-            if (chunk.length < chunkSize) break;
         }
         stream.end();
     }
@@ -115,6 +138,29 @@ class ExportService {
         for (const t of allTasks) {
             if (!tasksByProject.has(t.projectId)) tasksByProject.set(t.projectId, []);
             tasksByProject.get(t.projectId).push(t);
+        }
+
+        const hasher = crypto.createHash('sha256');
+        hasher.update('\uFEFF');
+        hasher.update(formatCsvRow(['Project ID', 'Name', 'Status', 'Progress (%)', 'Total Tasks', 'Completed Tasks', 'Overdue Tasks']));
+        for (const p of projects) {
+            const pTasks = tasksByProject.get(p.id) || [];
+            const totalTasks = pTasks.length;
+            const completedTasks = pTasks.filter(t => String(t.status).toLowerCase() === 'completed').length;
+            const overdueTasks = pTasks.filter(t => String(t.status).toLowerCase() !== 'completed' && this.services.isDeadlineOverdue(t.deadline)).length;
+            hasher.update(formatCsvRow([
+                p.id,
+                p.name,
+                p.status,
+                p.progress || 0,
+                totalTasks,
+                completedTasks,
+                overdueTasks
+            ]));
+        }
+        const digest = hasher.digest('hex');
+        if (typeof stream.setHeader === 'function') {
+            stream.setHeader('X-Export-SHA256', digest);
         }
 
         stream.write('\uFEFF');
@@ -152,10 +198,22 @@ class ExportService {
             ORDER BY u.name COLLATE NOCASE
         `;
 
+        const rows = await this.data.all(sql, [orgId]);
+
+        const hasher = crypto.createHash('sha256');
+        hasher.update('\uFEFF');
+        hasher.update(formatCsvRow(['Member ID', 'Name', 'Username', 'Role']));
+        for (const r of rows) {
+            hasher.update(formatCsvRow([r.id, r.name, r.username, r.role]));
+        }
+        const digest = hasher.digest('hex');
+        if (typeof stream.setHeader === 'function') {
+            stream.setHeader('X-Export-SHA256', digest);
+        }
+
         stream.write('\uFEFF');
         stream.write(formatCsvRow(['Member ID', 'Name', 'Username', 'Role']));
 
-        const rows = await this.data.all(sql, [orgId]);
         for (const r of rows) {
             stream.write(formatCsvRow([r.id, r.name, r.username, r.role]));
         }
@@ -182,6 +240,26 @@ class ExportService {
 
         const org = await this.data.get('SELECT name FROM institutions WHERE id = ?', [orgId]);
         const orgName = org ? org.name : 'Government Entity';
+
+        const hashInput = JSON.stringify({
+            projectId: project.id,
+            name: project.name,
+            status: project.status,
+            progress: project.progress,
+            organization: orgName,
+            tasks: tasks.map(t => ({
+                id: t.id,
+                title: t.title,
+                status: t.status,
+                priority: t.priority,
+                progress: t.progress,
+                deadline: t.deadline
+            }))
+        });
+        const digest = crypto.createHash('sha256').update(hashInput).digest('hex');
+        if (typeof stream.setHeader === 'function') {
+            stream.setHeader('X-Export-SHA256', digest);
+        }
 
         const totalTasks = tasks.length;
         const completedTasks = tasks.filter(t => String(t.status).toLowerCase() === 'completed').length;
@@ -227,7 +305,7 @@ class ExportService {
 
         let rowY = tableTop + 20;
         for (let i = 0; i < tasks.length; i++) {
-            if (rowY > 750) {
+            if (rowY > 730) {
                 doc.addPage();
                 rowY = 40;
             }
@@ -246,6 +324,22 @@ class ExportService {
             doc.text(deadlineFormatted, 475, rowY + 4);
             rowY += 18;
         }
+
+        // Tamper-evident verification watermark box in PDF footer
+        const bottomY = doc.page.height - 48;
+        doc.rect(40, bottomY - 6, 515, 26).fillAndStroke('#f8fafc', '#cbd5e1');
+        doc.fontSize(7).fillColor('#334155').text(
+            `Cryptographic Integrity SHA-256 Digest: ${digest}`,
+            45,
+            bottomY,
+            { align: 'center', width: 505 }
+        );
+        doc.fontSize(6.5).fillColor('#64748b').text(
+            'Digitally anchored by ORION Verification Engine. Tamper-evident governance record for statutory audit.',
+            45,
+            bottomY + 11,
+            { align: 'center', width: 505 }
+        );
 
         return new Promise((resolve, reject) => {
             stream.on('finish', resolve);
