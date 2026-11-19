@@ -18,6 +18,40 @@ ORION is a role-based project and task management dashboard designed for governm
 
 ---
 
+## Codebase Directory Structure
+
+```text
+orion/
+├── migrations/                # Sequential SQL schema migrations
+│   ├── 001_initial_schema.js
+│   ├── 002_fix_deadlines.js
+│   ├── 003_task_indexes.js
+│   ├── 004_government_schemes.js
+│   ├── 005_normalize_task_deadlines.js
+│   ├── 006_deprecate_dead_user_columns.js
+│   └── 007_scheme_compliance_readiness.js
+├── public/                    # Offline static assets and vendor bundles
+│   └── vendor/
+│       ├── three.min.js
+│       └── three.min.js.license.txt
+├── services/                  # Decoupled domain services
+│   ├── export_service.js      # Streaming CSV & PDF report generation
+│   └── schemes_service.js     # Government schemes catalog, rule matcher & readiness
+├── backend_data.js            # SQLite database driver, WAL configuration & transactional queue
+├── backend_routes.js          # Express route declarations (API v1 & legacy aliases)
+├── backend_services.js        # Core business logic, auth, tenant scoping & task workflows
+├── config.js                  # Production configuration and environment variable validator
+├── server.js                  # HTTP server initialization, CORS, CSP & graceful shutdown
+├── index.html                 # Single-page application shell
+├── main.js                    # SPA application controller, view rendering & event bindings
+├── router.js                  # Client-side hash router with accessibility focus management
+├── views.js                   # XSS-safe HTML templates & render sinks
+├── data_store.js              # Client-side API abstraction and HTTP fetch wrapper
+└── style.css                  # Design system styles and responsive layout
+```
+
+---
+
 ## Quickstart & Local Development
 
 ### Prerequisites
@@ -47,6 +81,7 @@ ORION loads `.env` automatically during local development. In production (`NODE_
 | :--- | :--- | :--- | :--- |
 | `NODE_ENV` | Environment mode (`development`, `test`, `production`) | `development` | Optional |
 | `PORT` | HTTP server listening port | `3000` | Optional |
+| `TRUST_PROXY` | Reverse proxy trust configuration (`loopback`, `linklocal`, hop count 0-5, or CIDR) | `false` | Required behind reverse proxy / ALB |
 | `ORION_DB_PATH` | Path to SQLite database file | `./orion.db` | Optional |
 | `SESSION_SECRET` | Secret key used for signing session cookies | Generated per-install | **Required in production** (≥ 32 chars) |
 | `ENABLE_DEMO_ACCOUNTS` | Enables demo seed accounts and quick-login cards | `true` in dev, `false` in prod | Optional |
@@ -118,6 +153,50 @@ The ORION Assistant provides interactive productivity intelligence:
 
 ---
 
+## API v1 Reference
+
+All primary endpoints are mounted under `/api/v1` with a backward-compatible `/api` alias. Requests modifying state require a valid session token (via cookie or `Authorization: Bearer <token>`) and CSRF validation headers.
+
+| Method | Endpoint | Access Role | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/auth/register` | Public | Register new user account (returns HTTP 201). |
+| `POST` | `/api/v1/auth/login` | Public | Authenticate user credentials and establish session. |
+| `POST` | `/api/v1/auth/logout` | Authenticated | Terminate session and invalidate session hash. |
+| `GET` | `/api/v1/auth/session` | Authenticated | Retrieve currently authenticated user context. |
+| `POST` | `/api/v1/auth/forgot-password` | Public | Request password reset token via configured mailer. |
+| `POST` | `/api/v1/auth/reset-password` | Public | Reset account password using verified token. |
+| `GET` | `/api/v1/dashboard` | Authenticated | Organization dashboard metrics, projects, and tasks. |
+| `GET` | `/api/v1/projects` | Authenticated | Offset-paginated projects within user's organization. |
+| `POST` | `/api/v1/projects` | Manager / Exec | Create project scoped to user's organization (HTTP 201). |
+| `GET` | `/api/v1/projects/:id` | Authenticated | Retrieve project details and verified milestone progress. |
+| `GET` | `/api/v1/projects/:id/tasks` | Authenticated | Keyset cursor-paginated tasks (`id_desc`, `deadline_asc`). |
+| `POST` | `/api/v1/tasks` | Manager / Exec | Create new task within an organization project (HTTP 201). |
+| `GET` | `/api/v1/tasks/:id` | Authenticated | Retrieve task metadata, subtasks, and progress reports. |
+| `PATCH` | `/api/v1/tasks/:id` | Manager / Exec | Update task details. Rejects direct progress if subtasks exist (HTTP 409). |
+| `DELETE` | `/api/v1/tasks/:id` | Manager / Exec | Cascade delete task, subtasks, and associated reports. |
+| `POST` | `/api/v1/tasks/:id/subtasks` | Manager / Exec | Add weighted subtask milestone to task (HTTP 201). |
+| `POST` | `/api/v1/tasks/:id/reassign` | Manager / Exec | Reassign task to another verified worker in organization. |
+| `POST` | `/api/v1/tasks/:id/reports` | Worker | Submit progress report for manager verification (HTTP 201). |
+| `POST` | `/api/v1/task-reports/:id/verify` | Manager / Exec | Approve or reject submitted worker task progress report. |
+| `GET` | `/api/v1/schemes` | Authenticated | Browse verified government schemes catalog with sector filters. |
+| `GET` | `/api/v1/projects/:id/schemes` | Authenticated | Evaluate project eligibility match against government schemes. |
+| `POST` | `/api/v1/projects/:id/schemes/:schemeId/apply` | Manager / Exec | Track internal application preparation for government scheme. |
+| `POST` | `/api/v1/projects/:id/schemes/:schemeId/readiness` | Manager / Exec | Update compliance readiness status (`pending`, `in_progress`, `verified`). |
+| `POST` | `/api/v1/schemes/ingest` | Admin / Exec | Ingest external scheme catalog feed with schema validation. |
+| `POST` | `/api/v1/organizations/apply` | Authenticated | Submit new organization registration for admin review. |
+| `POST` | `/api/v1/organizations/join` | Authenticated | Join verified organization via single-use invitation code. |
+| `POST` | `/api/v1/organizations/invites` | Manager / Exec | Generate expiring, single-use worker invitation code (HTTP 201). |
+| `POST` | `/api/v1/organizations/invites/:id/revoke`| Manager / Exec | Revoke an unused organization invitation code. |
+| `GET` | `/api/v1/admin/applications` | Platform Admin | View pending organization applications requiring verification. |
+| `POST` | `/api/v1/admin/applications/:id/review` | Platform Admin | Approve or reject pending organization application. |
+| `POST` | `/api/v1/assistant` | Authenticated | AI productivity assistant (JSON or progressive SSE stream). |
+| `GET` | `/api/v1/export/tasks/csv` | Authenticated | Stream organization tasks CSV with formula injection defense. |
+| `GET` | `/api/v1/export/projects/csv` | Authenticated | Stream organization projects CSV summary. |
+| `GET` | `/api/v1/export/members/csv` | Manager / Exec | Stream organization worker roster CSV. |
+| `GET` | `/api/v1/export/projects/:id/report.pdf` | Authenticated | Generate server-side PDF status report for project. |
+
+---
+
 ## Database Concurrency & Known Limitations
 
 ### SQLite WAL Mode Architecture
@@ -131,6 +210,19 @@ ORION utilizes SQLite 3 with Write-Ahead Logging (WAL) for high-performance conc
 > **Architectural Constraint**: SQLite is designed for a single application process accessing a local or volume-mounted database file. Running multiple concurrent Node.js processes against the same SQLite database file across multiple hosts or horizontal containers will cause database lock contention (`SQLITE_BUSY`).
 >
 > For multi-node horizontal autoscaling deployments, the database layer should be migrated to PostgreSQL or another client-server relational database.
+
+### PostgreSQL Migration Roadmap
+To scale ORION beyond a single instance, follow this 4-step migration roadmap:
+1. **Repository Layer Isolation (`ARCH-01`)**: Decouple database interactions from `backend_services.js` into domain repositories (`ProjectRepository`, `TaskRepository`, `UserRepository`, `SchemeRepository`).
+2. **Database Adapter Abstraction**: Introduce a unified `DatabaseClient` interface that switches between `sqlite3` and `pg` connection pool based on `DATABASE_URL` (e.g. `postgres://user:pass@host:5432/orion`).
+3. **DDL & Schema Translation**:
+   - Convert `INTEGER PRIMARY KEY AUTOINCREMENT` to `BIGSERIAL PRIMARY KEY`.
+   - Convert millisecond integer timestamps to `TIMESTAMPTZ`.
+   - Retain `ON CONFLICT (...) DO UPDATE` syntax (supported identically in PostgreSQL 9.5+).
+   - Configure PostgreSQL connection pooling (`max: 20`, `idleTimeoutMillis: 30000`).
+4. **Data Transition Script**:
+   - Execute sequential migrations (`001` through `007`) in PostgreSQL.
+   - Run an offline ETL script to stream rows from SQLite into PostgreSQL with sequence identity resets (`SELECT setval(...)`).
 
 ### Backups and Restores
 - `npm run backup`: Flushes the WAL log (`PRAGMA wal_checkpoint(TRUNCATE)`) and creates an atomic snapshot in `backups/`.
