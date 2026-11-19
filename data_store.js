@@ -542,6 +542,15 @@ class DataStore {
         return parseJsonSafe(res, 'Failed to apply for government scheme');
     }
 
+    async updateSchemeReadiness(projectId, schemeId, criterionKey, status) {
+        const res = await this.request(`${API_URL}/projects/${projectId}/schemes/${schemeId}/readiness`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ criterionKey, status })
+        });
+        return parseJsonSafe(res, 'Failed to update compliance readiness');
+    }
+
 }
 
 export const store = new DataStore();

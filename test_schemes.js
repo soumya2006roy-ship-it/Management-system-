@@ -184,6 +184,89 @@ async function run() {
     assert.ok(localReply.text.includes('APPLIED'));
     console.log('[PASS] Assistant successfully answers government scheme queries without duplicate logic.');
 
+    // -------------------------------------------------------------
+    // Test 6: Compliance Readiness Tracking (PROD-01 / PROD-02)
+    // -------------------------------------------------------------
+    console.log('\n--- Test 6: Compliance Readiness Tracking & Role Gating ---');
+    // 6.1: Worker cannot update readiness -> 403
+    await assert.rejects(
+        () => services.updateSchemeReadiness(wkrAId, projAId, targetSchemeId, 'financial_audit', 'in_progress'),
+        /Only managers, executives, or administrators can update compliance readiness/
+    );
+
+    // 6.2: Cross-tenant cannot update readiness -> 403
+    await assert.rejects(
+        () => services.updateSchemeReadiness(mgrBId, projAId, targetSchemeId, 'financial_audit', 'in_progress'),
+        /Access denied: Project does not belong to your organization/
+    );
+
+    // 6.3: Invalid status -> 400
+    await assert.rejects(
+        () => services.updateSchemeReadiness(mgrAId, projAId, targetSchemeId, 'financial_audit', 'not_a_valid_status'),
+        /Invalid readiness status/
+    );
+
+    // 6.4: Manager updates readiness successfully
+    const readinessRes1 = await services.updateSchemeReadiness(mgrAId, projAId, targetSchemeId, 'financial_audit', 'in_progress');
+    assert.strictEqual(readinessRes1.success, true);
+    assert.strictEqual(readinessRes1.status, 'in_progress');
+
+    const readinessRes2 = await services.updateSchemeReadiness(mgrAId, projAId, targetSchemeId, 'dva_certificate', 'verified');
+    assert.strictEqual(readinessRes2.success, true);
+    assert.strictEqual(readinessRes2.status, 'verified');
+
+    // 6.5: Verify getSchemesForProject reflects updated readiness states
+    const updatedProjectSchemes = await services.getSchemesForProject(mgrAId, projAId);
+    const targetEvaluated = updatedProjectSchemes.find(s => s.id === targetSchemeId);
+    assert.ok(targetEvaluated, 'Target scheme must be in evaluated list');
+    const finCriterion = targetEvaluated.unknownCriteria.find(c => c.criterionKey === 'financial_audit');
+    const dvaCriterion = targetEvaluated.unknownCriteria.find(c => c.criterionKey === 'dva_certificate');
+    assert.strictEqual(finCriterion.status, 'in_progress');
+    assert.strictEqual(dvaCriterion.status, 'verified');
+    console.log('[PASS] Compliance readiness states persisted, role-gated, and reflected in evaluations.');
+
+    // -------------------------------------------------------------
+    // Test 7: Feed Ingestion Interface (PROD-02)
+    // -------------------------------------------------------------
+    console.log('\n--- Test 7: Government Schemes Feed Ingestion ---');
+    // Non-array rejected
+    await assert.rejects(
+        () => services.ingestSchemesFromFeed('invalid_feed'),
+        /Feed items must be an array/
+    );
+
+    const testFeed = [
+        {
+            title: 'National Green Hydrogen Mission Incentive',
+            ministry: 'Ministry of New and Renewable Energy',
+            sector: 'Clean Tech & Renewable Energy',
+            description: 'Financial incentives for domestic electrolyser manufacturing and green hydrogen production.',
+            eligibilityCriteria: 'Minimum 30% local value addition and certified renewable energy compliance.',
+            maxFundingAmount: 500000000,
+            subsidyPercentage: 25.0,
+            portalUrl: 'https://mnre.gov.in/green-hydrogen',
+            sourceUrl: 'https://mnre.gov.in/notices/gh-incentive-2026',
+            isSampleData: 0
+        }
+    ];
+
+    const ingestResult = await services.ingestSchemesFromFeed(testFeed);
+    assert.strictEqual(ingestResult.success, true);
+    assert.strictEqual(ingestResult.count, 1);
+    assert.strictEqual(ingestResult.ingested[0].action, 'inserted');
+
+    const allSchemesAfterIngest = await services.getGovernmentSchemes();
+    assert.strictEqual(allSchemesAfterIngest.length, 4, 'Catalog count should increase to 4 after ingest');
+    const greenHydrogen = allSchemesAfterIngest.find(s => s.title.includes('Green Hydrogen'));
+    assert.ok(greenHydrogen, 'Ingested scheme must exist in catalog');
+
+    // Update existing scheme via feed
+    testFeed[0].description = 'Updated description for green hydrogen mission.';
+    const updateIngestResult = await services.ingestSchemesFromFeed(testFeed);
+    assert.strictEqual(updateIngestResult.success, true);
+    assert.strictEqual(updateIngestResult.ingested[0].action, 'updated');
+    console.log('[PASS] Scheme feed ingestion validated with insertions and idempotent updates.');
+
     await data.close();
     try { fs.rmSync(testDbPath, { force: true }); } catch (_e) {}
     console.log('\n=== ALL GOVERNMENT SCHEMES TESTS PASSED SUCCESSFULLY! ===\n');
