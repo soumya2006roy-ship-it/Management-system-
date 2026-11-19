@@ -285,21 +285,18 @@ class BackendServices {
         const orgId = user.organizationId;
         if (user.role === 'exec' && !this.isPlatformAdmin(userId)) throw new ApiError(403, 'Executive oversight requires platform administrator access.');
         if (user.role === 'manager' && !(await this.canManageOrganization(userId, orgId))) throw new ApiError(403, 'Manager access requires verified organization administrator membership.');
-        let projects;
-        let updates;
+        let projects = [];
+        let updates = [];
 
         if (orgId) {
             projects = await this.data.all('SELECT * FROM projects WHERE organizationId = ?', [orgId]);
             updates = await this.data.all('SELECT * FROM updates WHERE organizationId = ? ORDER BY timestamp DESC', [orgId]);
-        } else {
-            projects = await this.data.all('SELECT * FROM projects WHERE organizationId IS NULL');
-            updates = await this.data.all('SELECT * FROM updates WHERE organizationId IS NULL ORDER BY timestamp DESC');
         }
 
         const response = { currentUser: user, projects, updates };
 
         if (user.role === 'worker') {
-            response.myTasks = await this.data.all(
+            response.myTasks = orgId ? await this.data.all(
                 `SELECT t.*,
                         p.name AS projectName,
                         lr.status AS latestReportStatus,
@@ -315,10 +312,10 @@ class BackendServices {
                          GROUP BY taskId
                      ) r2 ON r1.taskId = r2.taskId AND r1.createdAt = r2.maxCreated
                  ) lr ON lr.taskId = t.id
-                 WHERE t.assignedTo = ? AND ((p.organizationId = ?) OR (p.organizationId IS NULL AND ? IS NULL))
+                 WHERE t.assignedTo = ? AND p.organizationId = ?
                  ORDER BY t.id DESC LIMIT 50`,
-                [userId, orgId, orgId]
-            );
+                [userId, orgId]
+            ) : [];
             response.availableInstitutions = await this.data.all("SELECT * FROM institutions WHERE verificationStatus = 'approved'");
             if (user.organizationId) {
                 const org = await this.data.get(
@@ -341,27 +338,21 @@ class BackendServices {
                     `SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE role = 'worker' AND organizationId = ?`,
                     [orgId]
                 );
+                response.pendingReports = await this.data.all(
+                    `SELECT r.*, t.title AS taskTitle, u.name AS submittedByName
+                     FROM task_reports r
+                     JOIN tasks t ON t.id = r.taskId
+                     JOIN projects p ON p.id = t.projectId
+                     LEFT JOIN users u ON u.id = r.submittedBy
+                     WHERE r.status = 'pending' AND (t.createdBy = ? OR p.organizationId = ?)
+                     ORDER BY r.createdAt DESC`,
+                    [userId, orgId]
+                );
             } else {
-                response.allTasks = await this.data.all(
-                    `SELECT t.*, p.name AS projectName FROM tasks t 
-                     JOIN projects p ON p.id = t.projectId 
-                     WHERE p.organizationId IS NULL
-                     ORDER BY t.id DESC LIMIT 50`
-                );
-                response.workers = await this.data.all(
-                    `SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE role = 'worker' AND organizationId IS NULL`
-                );
+                response.allTasks = [];
+                response.workers = [];
+                response.pendingReports = [];
             }
-            response.pendingReports = await this.data.all(
-                `SELECT r.*, t.title AS taskTitle, u.name AS submittedByName
-                 FROM task_reports r
-                 JOIN tasks t ON t.id = r.taskId
-                 JOIN projects p ON p.id = t.projectId
-                 LEFT JOIN users u ON u.id = r.submittedBy
-                 WHERE r.status = 'pending' AND (t.createdBy = ? OR p.organizationId = ?)
-                 ORDER BY r.createdAt DESC`,
-                [userId, orgId]
-            );
         } else {
             if (orgId) {
                 response.allTasks = await this.data.all(
@@ -375,15 +366,8 @@ class BackendServices {
                     [orgId]
                 );
             } else {
-                response.allTasks = await this.data.all(
-                    `SELECT t.*, p.name AS projectName FROM tasks t 
-                     JOIN projects p ON p.id = t.projectId 
-                     WHERE p.organizationId IS NULL
-                     ORDER BY t.id DESC LIMIT 50`
-                );
-                response.allUsers = await this.data.all(
-                    `SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE organizationId IS NULL`
-                );
+                response.allTasks = [];
+                response.allUsers = [];
             }
         }
         const visibleTasks = [...(response.myTasks || []), ...(response.allTasks || [])];
@@ -435,12 +419,11 @@ class BackendServices {
                 whereClauses.push('((p.organizationId = ?) OR (t.assignedTo = ?))');
                 params.push(orgId, userId);
             } else {
-                whereClauses.push('(t.assignedTo = ? OR t.createdBy = ?)');
-                params.push(userId, userId);
+                whereClauses.push('1 = 0');
             }
         } else if (user.role === 'manager') {
             if (!orgId) {
-                whereClauses.push('p.organizationId IS NULL');
+                whereClauses.push('1 = 0');
             } else {
                 whereClauses.push('p.organizationId = ?');
                 params.push(orgId);
@@ -490,10 +473,29 @@ class BackendServices {
                 params.push(cursor);
             }
         } else if (sort === 'deadline_asc') {
-            orderSql = 'ORDER BY t.deadline ASC, t.id ASC';
+            orderSql = 'ORDER BY (CASE WHEN t.deadline IS NULL THEN 1 ELSE 0 END) ASC, t.deadline ASC, t.id ASC';
             if (cursor) {
-                whereClauses.push('t.id > ?');
-                params.push(cursor);
+                let cDeadline = null;
+                let cId = null;
+                const strCursor = String(cursor).trim();
+                if (strCursor.includes('___')) {
+                    const parts = strCursor.split('___');
+                    cDeadline = parts[0] === 'NULL' ? null : decodeURIComponent(parts[0]);
+                    cId = Number(parts[1]);
+                } else if (/^\d+$/.test(strCursor)) {
+                    cId = Number(strCursor);
+                    const cursorTask = await this.data.get('SELECT deadline FROM tasks WHERE id = ?', [cId]);
+                    cDeadline = cursorTask ? cursorTask.deadline : null;
+                }
+                if (cId !== null) {
+                    if (cDeadline !== null) {
+                        whereClauses.push('((t.deadline IS NOT NULL AND (t.deadline > ? OR (t.deadline = ? AND t.id > ?))) OR t.deadline IS NULL)');
+                        params.push(cDeadline, cDeadline, cId);
+                    } else {
+                        whereClauses.push('(t.deadline IS NULL AND t.id > ?)');
+                        params.push(cId);
+                    }
+                }
             }
         } else {
             // id_desc (default)
@@ -520,7 +522,16 @@ class BackendServices {
 
         const hasMore = rows.length > limit;
         const data = hasMore ? rows.slice(0, limit) : rows;
-        const nextCursor = (hasMore && data.length > 0) ? data[data.length - 1].id : null;
+        let nextCursor = null;
+        if (hasMore && data.length > 0) {
+            const lastItem = data[data.length - 1];
+            if (sort === 'deadline_asc') {
+                const encodedDeadline = lastItem.deadline === null ? 'NULL' : encodeURIComponent(lastItem.deadline);
+                nextCursor = `${encodedDeadline}___${lastItem.id}`;
+            } else {
+                nextCursor = lastItem.id;
+            }
+        }
 
         if (data.length > 0) {
             const taskIds = data.map(t => t.id);
@@ -580,7 +591,7 @@ class BackendServices {
                 where.push('organizationId = ?');
                 params.push(orgId);
             } else {
-                where.push('organizationId IS NULL');
+                where.push('1 = 0');
             }
         }
 
@@ -630,7 +641,7 @@ class BackendServices {
             where.push('organizationId = ?');
             params.push(orgId);
         } else {
-            where.push('organizationId IS NULL');
+            where.push('1 = 0');
         }
 
         if (cursor) {
@@ -680,7 +691,7 @@ class BackendServices {
             }
         } else {
             if (!orgId) {
-                where.push('organizationId IS NULL');
+                where.push('1 = 0');
             } else {
                 where.push('organizationId = ?');
                 params.push(orgId);
@@ -723,16 +734,18 @@ class BackendServices {
         if (projectName.length > 200) {
             throw new ApiError(400, 'Project name must be 200 characters or fewer');
         }
-        let organizationId = null;
-        let creatorName = 'Manager';
-        if (creatorId) {
-        const creator = await this.data.get('SELECT name, organizationId, role FROM users WHERE id = ?', [creatorId]);
-        if (creator) {
-            if (creator.role !== 'manager' || !(await this.canManageOrganization(creatorId, creator.organizationId))) throw new ApiError(403, 'Verified organization administrator access required.');
-                organizationId = creator.organizationId;
-                if (creator.name) creatorName = creator.name;
-            }
+        if (!creatorId) {
+            throw new ApiError(403, 'Must belong to a verified organization');
         }
+        const creator = await this.data.get('SELECT name, organizationId, role FROM users WHERE id = ?', [creatorId]);
+        if (!creator || !creator.organizationId) {
+            throw new ApiError(403, 'Must belong to a verified organization');
+        }
+        if (creator.role !== 'manager' || !(await this.canManageOrganization(creatorId, creator.organizationId))) {
+            throw new ApiError(403, 'Verified organization administrator access required.');
+        }
+        const organizationId = creator.organizationId;
+        const creatorName = creator.name || 'Manager';
         const result = await this.data.run(
             "INSERT INTO projects (name, progress, status, organizationId) VALUES (?, 0, 'In Planning', ?)",
             [projectName, organizationId]
@@ -829,7 +842,8 @@ class BackendServices {
         return projectProgress;
     }
 
-    async updateTask({ taskId, title, description, status, priority, deadline, progress, requesterId }) {
+    async updateTask({ taskId, id, title, description, status, priority, deadline, progress, requesterId }) {
+        taskId = taskId || id;
         if (!taskId) {
             throw new ApiError(400, 'Task ID is required');
         }
@@ -882,6 +896,25 @@ class BackendServices {
             }
             updates.push('description = ?');
             params.push(trimmedDesc);
+        }
+
+        if (progress !== undefined || status !== undefined) {
+            const subtaskCountRow = await this.data.get('SELECT COUNT(*) AS total FROM subtasks WHERE parentTaskId = ?', [taskId]);
+            const hasSubtasks = subtaskCountRow && Number(subtaskCountRow.total) > 0;
+            if (hasSubtasks) {
+                if (progress !== undefined) {
+                    throw new ApiError(409, 'Cannot directly set progress on a task with subtasks');
+                }
+                if (status === 'Completed') {
+                    const pendingSubtasks = await this.data.get(
+                        "SELECT COUNT(*) AS pending FROM subtasks WHERE parentTaskId = ? AND status != 'approved'",
+                        [taskId]
+                    );
+                    if (pendingSubtasks && Number(pendingSubtasks.pending) > 0) {
+                        throw new ApiError(409, 'Cannot directly mark task as Completed when active subtasks exist');
+                    }
+                }
+            }
         }
 
         if (status !== undefined) {
@@ -1157,47 +1190,10 @@ class BackendServices {
         }
 
         if (institutionId !== undefined && institutionId !== null && String(institutionId).trim() !== '') {
-            const instId = Number(institutionId);
-            if (!instId || isNaN(instId) || instId <= 0) {
-                throw new ApiError(404, 'Organization not found or not approved');
-            }
-
-            return this.data.withTransaction(async () => {
-                const currentUser = await this.data.get('SELECT id, name, role, organizationId FROM users WHERE id = ?', [userId]);
-                if (!currentUser) {
-                    throw new ApiError(404, 'User not found');
-                }
-                const currentMembership = await this.data.get('SELECT organizationId FROM organization_memberships WHERE userId = ?', [userId]);
-                if (currentUser.organizationId || currentMembership) {
-                    throw new ApiError(409, 'User is already a member of an organization');
-                }
-
-                const institution = await this.data.get(
-                    "SELECT id, name FROM institutions WHERE id = ? AND verificationStatus = 'approved'",
-                    [instId]
-                );
-                if (!institution) {
-                    throw new ApiError(404, 'Organization not found or not approved');
-                }
-
-                await this.data.run('UPDATE users SET organizationId = ? WHERE id = ?', [institution.id, userId]);
-                await this.data.run(
-                    "INSERT INTO organization_memberships (userId, organizationId, role, createdAt) VALUES (?, ?, 'member', ?)",
-                    [userId, institution.id, Date.now()]
-                );
-                await this.data.addUpdate(currentUser.name || 'Member', `Joined ${institution.name}`, institution.id);
-
-                return {
-                    success: true,
-                    organization: {
-                        id: institution.id,
-                        name: institution.name
-                    }
-                };
-            });
+            throw new ApiError(400, 'Joining via institution ID is disabled. A valid invitation code is required.');
         }
 
-        throw new ApiError(400, 'Either institutionId or invite code is required');
+        throw new ApiError(400, 'A valid invitation code is required');
     }
 
         async submitOrganizationApplication(applicantId, payload = {}) {
@@ -2006,6 +2002,7 @@ class BackendServices {
                 executeSummarizeProject,
                 proposeReassign
             });
+            responsePayload.mode = 'local_rule_engine';
         }
 
         // Save assistant response to history
@@ -2014,7 +2011,7 @@ class BackendServices {
             [userId, projectId || null, 'assistant', responsePayload.text || '', Date.now()]
         );
         if (!responsePayload.mode) {
-            responsePayload.mode = (apiKey && apiKey.trim() && !apiKey.startsWith('replace') && !apiKey.startsWith('your_')) ? 'gemini' : 'local_rule_engine';
+            responsePayload.mode = 'local_rule_engine';
         }
         return responsePayload;
     }
@@ -2452,8 +2449,8 @@ class BackendServices {
         return responsePayload;
     }
 
-    calculateSchemeMatch(project, scheme, taskCount = 0, org = null) {
-        return this.schemesService.calculateSchemeMatch(project, scheme, taskCount, org);
+    calculateSchemeMatch(project, scheme, taskCount = 0, org = null, readinessMap = null) {
+        return this.schemesService.calculateSchemeMatch(project, scheme, taskCount, org, readinessMap);
     }
 
     async getGovernmentSchemes(options = {}) {
@@ -2466,6 +2463,18 @@ class BackendServices {
 
     async applyForScheme(userId, projectId, schemeId) {
         return this.schemesService.applyForScheme(userId, projectId, schemeId);
+    }
+
+    async updateSchemeReadiness(userId, projectId, schemeId, criterionKey, status) {
+        return this.schemesService.updateSchemeReadiness(userId, projectId, schemeId, criterionKey, status);
+    }
+
+    async ingestSchemesFromFeed(items) {
+        return this.schemesService.ingestSchemesFromFeed(items);
+    }
+
+    async ensureReadinessTable() {
+        return this.schemesService.ensureReadinessTable();
     }
 
 }

@@ -152,12 +152,22 @@ async function run() {
         assert.ok(worker1Membership && worker1Membership.role === 'member');
 
         // ==========================================
-        // 5. joinOrganization: Success via institutionId
+        // 5. joinOrganization: Rejection via institutionId (SEC-01) & Success via Invite Code
         // ==========================================
-        console.log('--- Test 5: joinOrganization Success via institutionId ---');
+        console.log('--- Test 5: joinOrganization Rejection via institutionId (SEC-01) ---');
+        await expectError(
+            () => services.joinOrganization({ userId: worker2.id, institutionId: inst1.id }),
+            400,
+            'invitation code'
+        );
+        const invite2 = await services.createOrganizationInvite(creator1.id, {
+            organizationId: inst1.id,
+            maxUses: 1,
+            expiresInHours: 24
+        });
         const joinIdResult = await services.joinOrganization({
             userId: worker2.id,
-            institutionId: inst1.id
+            code: invite2.code
         });
         assert.ok(joinIdResult && joinIdResult.success);
         assert.strictEqual(joinIdResult.organization.id, inst1.id);
@@ -238,30 +248,20 @@ async function run() {
         );
 
         // ==========================================
-        // 8. joinOrganization: Non-Existent and Unapproved Institution (404)
+        // 8. joinOrganization: Rejection of institutionId (SEC-01)
         // ==========================================
-        console.log('--- Test 8: joinOrganization Non-Existent and Unapproved Institution (404) ---');
-        // Non-existent ID
+        console.log('--- Test 8: joinOrganization Rejection of institutionId (SEC-01) ---');
+        // Any attempt to join via institutionId without a code is rejected
         await expectError(
             () => services.joinOrganization({ userId: worker3.id, institutionId: 999999 }),
-            404,
-            'not found or not approved'
+            400,
+            'invitation code'
         );
 
-        // Non-numeric ID
         await expectError(
             () => services.joinOrganization({ userId: worker3.id, institutionId: 'invalid' }),
-            404,
-            'not found or not approved'
-        );
-
-        // Unapproved institution (verificationStatus = 'unverified')
-        const unverifiedResult = await data.run("INSERT INTO institutions (name, type, verificationStatus) VALUES ('Pending Org', 'Government', 'unverified')");
-        const unapprovedId = unverifiedResult.lastID;
-        await expectError(
-            () => services.joinOrganization({ userId: worker3.id, institutionId: unapprovedId }),
-            404,
-            'not found or not approved'
+            400,
+            'invitation code'
         );
 
         // ==========================================
@@ -270,14 +270,14 @@ async function run() {
         console.log('--- Test 9: joinOrganization Missing User or Input (400, 404) ---');
         // Missing userId
         await expectError(
-            () => services.joinOrganization({ institutionId: inst1.id }),
+            () => services.joinOrganization({ code: invite.code }),
             400,
             'user id is required'
         );
 
         // Non-existent user
         await expectError(
-            () => services.joinOrganization({ userId: 999999, institutionId: inst1.id }),
+            () => services.joinOrganization({ userId: 999999, code: invite.code }),
             404,
             'user not found'
         );
@@ -286,11 +286,25 @@ async function run() {
         await expectError(
             () => services.joinOrganization({ userId: worker3.id }),
             400,
-            'either institutionid or invite code is required'
+            'invitation code is required'
         );
 
-        // Worker3 now successfully joins Autonomous Research Institute via institutionId
-        const worker3Join = await services.joinOrganization({ userId: worker3.id, institutionId: instNoCreator.id });
+        // Worker3 now successfully joins Autonomous Research Institute via invite code
+        const inst3Admin = await services.registerUser({
+            username: 'inst3_admin',
+            password: 'Password123!',
+            name: 'Inst 3 Admin',
+            role: 'manager'
+        });
+        await data.run('UPDATE users SET organizationId = ? WHERE id = ?', [instNoCreator.id, inst3Admin.id]);
+        await data.run("INSERT INTO organization_memberships (userId, organizationId, role, createdAt) VALUES (?, ?, 'admin', ?)", [inst3Admin.id, instNoCreator.id, Date.now()]);
+
+        const invite3 = await services.createOrganizationInvite(inst3Admin.id, {
+            organizationId: instNoCreator.id,
+            maxUses: 1,
+            expiresInHours: 24
+        });
+        const worker3Join = await services.joinOrganization({ userId: worker3.id, code: invite3.code });
         assert.ok(worker3Join.success);
         assert.strictEqual(worker3Join.organization.id, instNoCreator.id);
 

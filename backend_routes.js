@@ -79,8 +79,9 @@ function registerApiRoutes(app, services) {
 
     const rateLimit = (name, limit, windowMs) => async (req, res, next) => {
         try {
-            // Do not trust forwarded headers unless an explicit proxy deployment is configured.
-            const source = req.ip || req.socket.remoteAddress || 'unknown';
+            // Do not trust forwarded headers unless an explicit proxy deployment is configured on the app.
+            const trustProxy = req.app ? Boolean(req.app.get('trust proxy')) : false;
+            const source = (trustProxy ? req.ip : null) || req.socket?.remoteAddress || 'unknown';
             const key = crypto.createHash('sha256').update(`${name}:${source}`).digest('hex');
             const result = await services.consumeRateLimit(key, limit, windowMs);
             if (!result.allowed) {
@@ -346,6 +347,7 @@ function registerApiRoutes(app, services) {
 
     register('post', '/institutions', authenticate, async (req, res) => {
         try {
+            res.setHeader('X-Deprecated', 'POST /institutions is deprecated. Use POST /organizations/applications for verified onboarding.');
             if (req.user.role !== 'manager' && req.user.role !== 'exec') {
                 res.status(403).json({ error: 'Access denied: Only managers or executives can register institutions' });
                 return;
@@ -534,6 +536,31 @@ function registerApiRoutes(app, services) {
             const projectId = Number(req.params.id);
             const schemeId = Number(req.params.schemeId);
             const result = await services.applyForScheme(req.user.id, projectId, schemeId);
+            res.json(result);
+        } catch (error) {
+            handleError(res, error);
+        }
+    });
+
+    register('post', '/projects/:id/schemes/:schemeId/readiness', authenticate, async (req, res) => {
+        try {
+            const projectId = Number(req.params.id);
+            const schemeId = Number(req.params.schemeId);
+            const { criterionKey, status } = req.body || {};
+            const result = await services.updateSchemeReadiness(req.user.id, projectId, schemeId, criterionKey, status);
+            res.json(result);
+        } catch (error) {
+            handleError(res, error);
+        }
+    });
+
+    register('post', '/schemes/ingest', authenticate, async (req, res) => {
+        try {
+            if (req.user.role !== 'admin' && req.user.role !== 'exec') {
+                return res.status(403).json({ error: 'Only administrators or executives can ingest scheme feeds' });
+            }
+            const { items } = req.body || {};
+            const result = await services.ingestSchemesFromFeed(items);
             res.json(result);
         } catch (error) {
             handleError(res, error);

@@ -234,6 +234,27 @@ async function runAssistantTests() {
     }
     console.log('[PASS] Client bundle checked: zero API keys exposed.\n');
 
+    // -------------------------------------------------------------
+    // Test 4.8: AI Engine Mode Attribution on Local Fallback (BE-03)
+    // -------------------------------------------------------------
+    console.log('--- Test 4.8: AI Engine Mode Attribution on Local Fallback (BE-03) ---');
+    const origKey = process.env.GEMINI_API_KEY;
+    try {
+        process.env.GEMINI_API_KEY = 'invalid-test-key-for-fallback';
+        const fallbackRes = await services.assistantChat(managerVikram.id, {
+            message: 'List overdue tasks',
+            projectId: project.id
+        });
+        assert.strictEqual(fallbackRes.mode, 'local_rule_engine', 'Local fallback must attribute mode as local_rule_engine even when apiKey was set');
+    } finally {
+        if (origKey !== undefined) {
+            process.env.GEMINI_API_KEY = origKey;
+        } else {
+            delete process.env.GEMINI_API_KEY;
+        }
+    }
+    console.log('[PASS] Local engine fallback properly attributed as local_rule_engine.\n');
+
     // Cleanup test db
     await db.close();
     try {

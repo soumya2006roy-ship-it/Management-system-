@@ -143,6 +143,33 @@ async function run() {
             assignedTo: worker2.id,
             weight: 2
         });
+
+        // BE-02: Enforce subtask progress invariant
+        await assert.rejects(
+            () => services.updateTask({
+                taskId: createdTask.id,
+                progress: 80,
+                requesterId: manager1.id
+            }),
+            (err) => {
+                assert.strictEqual(err.status, 409);
+                assert.ok(err.message.includes('Cannot directly set progress on a task with subtasks'));
+                return true;
+            }
+        );
+
+        await assert.rejects(
+            () => services.updateTask({
+                taskId: createdTask.id,
+                status: 'Completed',
+                requesterId: manager1.id
+            }),
+            (err) => {
+                assert.strictEqual(err.status, 409);
+                assert.ok(err.message.includes('Cannot directly mark task as Completed when active subtasks exist'));
+                return true;
+            }
+        );
         // Worker submits subtask (creates subtask_events row)
         await services.submitSubtask(subtask.id, worker2.id, { submissionText: 'Subtask done' });
 

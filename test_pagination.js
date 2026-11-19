@@ -40,7 +40,8 @@ async function run() {
         password: 'Password@123',
         name: 'Scale Worker'
     });
-    await services.joinOrganization({ userId: worker.id, institutionId: inst.id });
+    const invite = await services.createOrganizationInvite(manager.id, { organizationId: inst.id, maxUses: 1, expiresInHours: 24 });
+    await services.joinOrganization({ userId: worker.id, code: invite.code });
 
     // 2. Batch seed 10,000 tasks in a single SQLite transaction
     console.log('\n--- Seeding 10,000 tasks into test project ---');
@@ -175,7 +176,42 @@ async function run() {
     assert.ok(instsPage.pageInfo.total >= 1);
     console.log('[PASS] Institutions offset pagination operates correctly');
 
-    // 9. Cleanup
+    // 9. Test Keyset Pagination with deadline_asc and Composite Cursor (BE-01)
+    console.log('\n--- Test 3.7: Keyset Pagination with deadline_asc and Composite Cursor (BE-01) ---');
+    const deadlinePage1 = await services.getTasksPaginated(manager.id, {
+        limit: 15,
+        sort: 'deadline_asc',
+        projectId: project.id
+    });
+    assert.strictEqual(deadlinePage1.data.length, 15, 'Page 1 must return 15 tasks');
+    assert.ok(deadlinePage1.pageInfo.nextCursor, 'Must return nextCursor for pagination');
+    assert.ok(String(deadlinePage1.pageInfo.nextCursor).includes('___'), 'Cursor must be composite format (deadline___id)');
+
+    const deadlinePage2 = await services.getTasksPaginated(manager.id, {
+        limit: 15,
+        sort: 'deadline_asc',
+        cursor: deadlinePage1.pageInfo.nextCursor,
+        projectId: project.id
+    });
+    assert.strictEqual(deadlinePage2.data.length, 15, 'Page 2 must return 15 tasks');
+
+    // Verify zero overlap
+    const deadlineP1Ids = new Set(deadlinePage1.data.map(t => t.id));
+    for (const t of deadlinePage2.data) {
+        assert.ok(!deadlineP1Ids.has(t.id), `Task ID ${t.id} must not appear in both page 1 and page 2`);
+    }
+
+    // Verify ordering
+    for (let i = 0; i < deadlinePage1.data.length - 1; i++) {
+        const curr = deadlinePage1.data[i];
+        const next = deadlinePage1.data[i + 1];
+        if (curr.deadline !== null && next.deadline !== null) {
+            assert.ok(curr.deadline <= next.deadline, 'Deadlines must be in ascending order');
+        }
+    }
+    console.log('[PASS] Composite keyset pagination for deadline_asc operates cleanly with zero overlap.');
+
+    // 10. Cleanup
     await data.close();
     try { fs.rmSync(process.env.ORION_DB_PATH, { force: true }); } catch (_e) {}
     console.log('\n=== ALL PAGINATION & SCALING TESTS PASSED SUCCESSFULLY (100%) ===\n');

@@ -236,6 +236,81 @@ async function run() {
     assert.strictEqual(loginResult, null, 'Plaintext password login must return null (rejected)');
     await rawData.close();
 
+    // --- Regression Test: SEC-01 Organization Self-Enrollment Backdoor Closed ---
+    const secData = new BackendData();
+    await secData.init();
+    const secServices = new BackendServices(secData);
+    
+    const secManager = await secServices.registerUser({
+        username: 'sec_manager@test.org',
+        password: 'Password123!',
+        name: 'Sec Manager',
+        role: 'manager'
+    });
+    const secInst = await secServices.addInstitution({
+        name: 'Sec Institute',
+        type: 'Defense',
+        contact: 'sec@test.org',
+        creatorId: secManager.id
+    });
+    const secWorker = await secServices.registerUser({
+        username: 'sec_worker@test.org',
+        password: 'Password123!',
+        name: 'Sec Worker',
+        role: 'worker'
+    });
+
+    // SEC-01: Direct join via institutionId MUST fail with 400
+    let sec01Rejected = false;
+    try {
+        await secServices.joinOrganization({ userId: secWorker.id, institutionId: secInst.id });
+    } catch (err) {
+        if (err.status === 400 && err.message.includes('invitation code')) {
+            sec01Rejected = true;
+        }
+    }
+    assert.strictEqual(sec01Rejected, true, 'joinOrganization must reject joining via institutionId');
+
+    // SEC-01: Joining via redeemOrganizationInvite still works
+    const secInvite = await secServices.createOrganizationInvite(secManager.id, {
+        organizationId: secInst.id,
+        maxUses: 1,
+        expiresInHours: 24
+    });
+    const secJoin = await secServices.joinOrganization({ userId: secWorker.id, code: secInvite.code });
+    assert.strictEqual(secJoin.success, true, 'redeemOrganizationInvite via code must succeed');
+    assert.strictEqual(secJoin.organization.id, secInst.id);
+
+    // --- Regression Test: DATA-01 Eliminate Null-Tenant Project Leakage ---
+    const unaffiliatedUser = await secServices.registerUser({
+        username: 'unaffiliated@test.org',
+        password: 'Password123!',
+        name: 'Unaffiliated User',
+        role: 'worker'
+    });
+    // Unaffiliated user cannot create a project (must belong to verified org)
+    let nullTenantProjRejected = false;
+    try {
+        await secServices.createProject({ name: 'Null Tenant Project', creatorId: unaffiliatedUser.id });
+    } catch (err) {
+        if (err.status === 403) nullTenantProjRejected = true;
+    }
+    assert.strictEqual(nullTenantProjRejected, true, 'createProject must reject users without verified organization (403)');
+
+    // In getDashboard, unaffiliated user must see empty arrays (never organizationId IS NULL projects)
+    // First, insert an orphaned project with organizationId IS NULL to test isolation
+    await secData.run("INSERT INTO projects (name, progress, status, organizationId) VALUES ('Orphaned Project', 0, 'In Planning', NULL)");
+    const unaffiliatedDash = await secServices.getDashboard(unaffiliatedUser.id);
+    assert.strictEqual(unaffiliatedDash.projects.length, 0, 'Unaffiliated user must see 0 projects in getDashboard');
+    assert.strictEqual(unaffiliatedDash.updates.length, 0, 'Unaffiliated user must see 0 updates in getDashboard');
+    assert.strictEqual(unaffiliatedDash.myTasks.length, 0, 'Unaffiliated user must see 0 myTasks in getDashboard');
+
+    // --- Regression Test: SEC-02 CORS Preflight Methods ---
+    const serverJsContent = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+    assert.ok(serverJsContent.includes("'Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS'"), 'server.js must allow PATCH and DELETE in CORS preflight');
+
+    await secData.close();
+
     console.log('Security unit tests passed.');
 }
 
