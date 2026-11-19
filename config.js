@@ -56,7 +56,8 @@ function createConfig(env = process.env) {
     if (trustProxyValue) {
         if (/^\d+$/.test(trustProxyValue) && Number(trustProxyValue) <= 5) trustProxy = Number(trustProxyValue);
         else if (['loopback', 'linklocal', 'uniquelocal'].includes(trustProxyValue)) trustProxy = trustProxyValue;
-        else throw new Error('TRUST_PROXY must be a hop count from 0 to 5 or loopback, linklocal, or uniquelocal.');
+        else if (/^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?(,\s*(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?)*$/.test(trustProxyValue)) trustProxy = trustProxyValue.split(',').map(s => s.trim());
+        else throw new Error('TRUST_PROXY must be a hop count from 0 to 5, loopback, linklocal, uniquelocal, or trusted CIDRs.');
     }
 
     if (isProduction && !String(env.ORION_DB_PATH || '').trim()) {
