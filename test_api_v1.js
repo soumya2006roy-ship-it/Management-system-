@@ -1,5 +1,8 @@
 const assert = require('assert');
 const http = require('http');
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
 const express = require('express');
 const { BackendData } = require('./backend_data');
 const { BackendServices } = require('./backend_services');
@@ -7,6 +10,9 @@ const { registerApiRoutes } = require('./backend_routes');
 
 process.env.SESSION_SECRET = process.env.SESSION_SECRET || 'test-secret-at-least-32-chars-long-1234567890';
 process.env.NODE_ENV = 'test';
+const testDbPath = path.join(os.tmpdir(), `orion-test-apiv1-${process.pid}-${Date.now()}.db`);
+process.env.ORION_DB_PATH = testDbPath;
+try { fs.rmSync(testDbPath, { force: true }); } catch (_e) {}
 
 function request(server, method, path, headers = {}, body = null) {
     return new Promise((resolve, reject) => {
@@ -179,6 +185,7 @@ async function run() {
     } finally {
         await new Promise((resolve) => server.close(resolve));
         await data.close();
+        try { fs.rmSync(testDbPath, { force: true }); } catch (_e) {}
     }
 }
 
