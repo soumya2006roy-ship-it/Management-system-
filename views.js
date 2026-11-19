@@ -422,22 +422,10 @@ export const Views = {
                 `;
             } else {
                 orgHTML = `
-                    <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.88rem;">Join an approved organization directly or enter an invite code.</p>
+                    <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.88rem;">Join a verified organization using an active invitation code.</p>
                     
-                    <div style="margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--glass-border);">
-                        <label for="select-org-join" style="font-weight: 600; font-size: 0.85rem; display: block; margin-bottom: 0.5rem;">Join Approved Organization</label>
-                        <div style="display: flex; gap: 0.5rem;">
-                            <select id="select-org-join" class="form-input" style="flex: 1; margin-bottom: 0;">
-                                <option value="">Select organization...</option>
-                                ${availableInstitutions.map(inst => `<option value="${escapeHtml(inst.id)}">${escapeHtml(inst.name)} (${escapeHtml(inst.type || 'Institution')})</option>`).join('')}
-                            </select>
-                            <button id="join-org-select-btn" class="btn btn-primary btn-sm" type="button">JOIN</button>
-                        </div>
-                        <p id="join-org-select-error" class="field-error" style="color: var(--error); font-size: 0.8rem; margin-top: 0.25rem;"></p>
-                    </div>
-
                     <div>
-                        <label for="organization-invite-code" style="font-weight: 600; font-size: 0.85rem; display: block; margin-bottom: 0.5rem;">Or Join with Invite Code</label>
+                        <label for="organization-invite-code" style="font-weight: 600; font-size: 0.85rem; display: block; margin-bottom: 0.5rem;">Join with Invite Code</label>
                         <div style="display: flex; gap: 0.5rem;">
                             <input id="organization-invite-code" class="form-input" autocomplete="off" maxlength="100" placeholder="Enter invite code" style="flex: 1; margin-bottom: 0;" aria-describedby="organization-invite-error">
                             <button id="join-org-btn" class="btn btn-primary btn-sm" type="button">JOIN CODE</button>
@@ -805,7 +793,7 @@ export const Views = {
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                     <h2>Registered Institutions</h2>
                     <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <button id="open-register-inst-modal-btn" class="btn btn-primary btn-sm">+ Register Institution</button>
+                        <a href="#/organizations" class="btn btn-primary btn-sm">+ Apply for Organization</a>
                         <a href="#/dashboard" class="btn btn-outline btn-sm">Back to Dashboard</a>
                     </div>
                 </div>
@@ -978,7 +966,15 @@ export const Views = {
                 <p class="page-lead">Match your organization's projects with verified national grants, PLI subsidies, and deep-tech policy incentives.</p>
             </header>
 
-            <div class="card card-3d" style="margin-top: 1.5rem; margin-bottom: 2rem;">
+            <div class="disclaimer-banner" style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 8px; padding: 1rem; margin-top: 1.25rem; margin-bottom: 1.5rem; display: flex; gap: 0.75rem; align-items: flex-start;">
+                <span style="font-size: 1.25rem; line-height: 1;">ℹ️</span>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
+                    <strong style="color: var(--text-primary);">Official Portal Notice:</strong>
+                    ORION provides internal eligibility pre-checks, milestone matching, and compliance readiness tracking. ORION does not directly disburse funds or submit statutory filings. All official subsidy applications must be filed directly through the respective ministry portal. Clicking <strong>Track &amp; Open Official Portal</strong> records internal preparation and launches the official government website.
+                </div>
+            </div>
+
+            <div class="card card-3d" style="margin-top: 1rem; margin-bottom: 2rem;">
                 <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; justify-content: space-between;">
                     <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; flex: 1;">
                         <label for="scheme-project-select" style="font-weight: 600; font-size: 0.9rem; min-width: 140px;">Select Project:</label>
@@ -1062,14 +1058,29 @@ export const Views = {
                                             </div>
                                         ` : ''}
                                         ${s.unknownCriteria && s.unknownCriteria.length ? `
-                                            <div style="margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed var(--border); font-size: 0.75rem; color: var(--text-muted);">
-                                                <div style="font-weight: 600; text-transform: uppercase; margin-bottom: 0.2rem;">Pending Verification:</div>
-                                                ${s.unknownCriteria.map(u => `
-                                                    <div style="display: flex; gap: 6px; align-items: flex-start;">
-                                                        <span style="color: var(--warning, #f59e0b);">?</span>
-                                                        <span>${escapeHtml(u.criterion)} — ${escapeHtml(u.reason)}</span>
-                                                    </div>
-                                                `).join('')}
+                                            <div style="margin-top: 0.75rem; padding-top: 0.65rem; border-top: 1px dashed var(--border); font-size: 0.75rem;">
+                                                <div style="font-weight: 600; text-transform: uppercase; margin-bottom: 0.4rem; color: var(--text-muted);">Compliance &amp; Audit Readiness:</div>
+                                                ${s.unknownCriteria.map(u => {
+                                                    const statusLabel = u.status === 'verified' ? '✓ Verified' : u.status === 'in_progress' ? '⏳ In Progress' : '⚠️ Pending';
+                                                    const statusColor = u.status === 'verified' ? 'var(--success, #10b981)' : u.status === 'in_progress' ? 'var(--warning, #f59e0b)' : 'var(--text-muted, #94a3b8)';
+                                                    return `
+                                                        <div style="margin-bottom: 0.5rem; padding: 0.45rem 0.6rem; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border);">
+                                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; gap: 0.5rem; flex-wrap: wrap;">
+                                                                <span style="font-weight: 600; color: var(--text-primary); font-size: 0.8rem;">${escapeHtml(u.criterion)}</span>
+                                                                ${selectedProjectId && canApply ? `
+                                                                    <select class="form-input form-input-sm scheme-readiness-select" data-project-id="${escapeHtml(selectedProjectId)}" data-scheme-id="${escapeHtml(s.id)}" data-criterion-key="${escapeHtml(u.criterionKey || '')}" style="font-size: 0.75rem; padding: 2px 6px; width: auto; height: auto;">
+                                                                        <option value="pending" ${u.status === 'pending' || u.status === 'unknown' ? 'selected' : ''}>Pending</option>
+                                                                        <option value="in_progress" ${u.status === 'in_progress' ? 'selected' : ''}>In Progress</option>
+                                                                        <option value="verified" ${u.status === 'verified' ? 'selected' : ''}>Verified</option>
+                                                                    </select>
+                                                                ` : `
+                                                                    <span style="color: ${statusColor}; font-weight: 600; font-size: 0.75rem;">${statusLabel}</span>
+                                                                `}
+                                                            </div>
+                                                            <div style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.3;">${escapeHtml(u.reason)}</div>
+                                                        </div>
+                                                    `;
+                                                }).join('')}
                                             </div>
                                         ` : ''}
                                     </div>
@@ -1081,13 +1092,13 @@ export const Views = {
                                 <div>
                                     ${selectedProjectId ? (
                                         isApplied ? `
-                                            <span class="status-pill status-pill--complete" style="font-weight: 600;">✓ APPLIED</span>
+                                            <span class="status-pill status-pill--complete" style="font-weight: 600;">✓ TRACKED (PORTAL ACTIVE)</span>
                                         ` : canApply ? `
-                                            <button class="btn btn-primary btn-sm apply-scheme-btn" data-project-id="${escapeHtml(selectedProjectId)}" data-scheme-id="${escapeHtml(s.id)}">
-                                                Apply
+                                            <button class="btn btn-primary btn-sm apply-scheme-btn" data-project-id="${escapeHtml(selectedProjectId)}" data-scheme-id="${escapeHtml(s.id)}" data-portal-url="${escapeHtml(s.portalUrl || '')}">
+                                                Track &amp; Open Official Portal ↗
                                             </button>
                                         ` : `
-                                            <span style="font-size: 0.75rem; color: var(--text-muted);">Manager required to apply</span>
+                                            <span style="font-size: 0.75rem; color: var(--text-muted);">Manager required to track</span>
                                         `
                                     ) : `
                                         <button class="btn btn-outline btn-sm check-scheme-match-prompt-btn" data-scheme-id="${escapeHtml(s.id)}">

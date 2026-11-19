@@ -372,7 +372,20 @@ async function initLanding3D() {
     }
 }
 
+let currentViewCleanup = null;
+
+export function registerViewCleanup(cleanupFn) {
+    if (typeof currentViewCleanup === 'function') {
+        try { currentViewCleanup(); } catch (e) { console.warn('Previous view cleanup error:', e); }
+    }
+    currentViewCleanup = cleanupFn;
+}
+
 const render = (html) => {
+    if (typeof currentViewCleanup === 'function') {
+        try { currentViewCleanup(); } catch (e) { console.warn('View cleanup error:', e); }
+        currentViewCleanup = null;
+    }
     startLoadingProgress();
     const currentHeight = app.getBoundingClientRect().height;
     app.classList.add('page-exit');
@@ -529,18 +542,42 @@ const routes = {
                 btn.addEventListener('click', async (e) => {
                     const schemeId = e.currentTarget.dataset.schemeId;
                     const projId = e.currentTarget.dataset.projectId;
+                    const portalUrl = e.currentTarget.dataset.portalUrl;
                     e.currentTarget.disabled = true;
-                    e.currentTarget.textContent = 'Submitting...';
+                    e.currentTarget.textContent = 'Recording...';
 
                     try {
                         const res = await store.applyForScheme(projId, schemeId);
-                        showToast(res.message || 'Application submitted successfully!');
+                        showToast(res.message || 'Internal tracking active. Opening official portal...');
+                        if (portalUrl && portalUrl.startsWith('http')) {
+                            window.open(portalUrl, '_blank', 'noopener,noreferrer');
+                        }
                         evaluatedSchemes = await store.getProjectSchemes(projId);
                         await renderSchemesPage();
                     } catch (err) {
-                        showToast(err.message || 'Failed to submit application', 'error');
+                        showToast(err.message || 'Failed to record tracking', 'error');
                         e.currentTarget.disabled = false;
-                        e.currentTarget.textContent = 'Apply';
+                        e.currentTarget.textContent = 'Track & Open Official Portal ↗';
+                    }
+                });
+            });
+
+            document.querySelectorAll('.scheme-readiness-select').forEach((select) => {
+                select.addEventListener('change', async (e) => {
+                    const projId = e.target.dataset.projectId;
+                    const schemeId = e.target.dataset.schemeId;
+                    const criterionKey = e.target.dataset.criterionKey;
+                    const newStatus = e.target.value;
+                    e.target.disabled = true;
+
+                    try {
+                        await store.updateSchemeReadiness(projId, schemeId, criterionKey, newStatus);
+                        showToast('Compliance readiness updated');
+                        evaluatedSchemes = await store.getProjectSchemes(projId);
+                        await renderSchemesPage();
+                    } catch (err) {
+                        showToast(err.message || 'Failed to update readiness', 'error');
+                        e.target.disabled = false;
                     }
                 });
             });
@@ -809,7 +846,7 @@ const routes = {
             if ((realData.myTasks || realData.allTasks)) {
                 const tasks = realData.myTasks || realData.allTasks;
                 const approaching = tasks.some(t => {
-                    if (!t.deadline || t.status === 'Completed') return false;
+                    if (!t.deadline || String(t.status || '').toLowerCase() === 'completed') return false;
                     const due = new Date(t.deadline);
                     const now = new Date();
                     const diff = (due - now) / (1000 * 60 * 60 * 24);
@@ -1378,35 +1415,7 @@ const routes = {
                     });
                 }
 
-                const joinOrgSelectBtn = document.getElementById('join-org-select-btn');
-                const orgSelect = document.getElementById('select-org-join');
-                if (joinOrgSelectBtn && orgSelect) {
-                    joinOrgSelectBtn.addEventListener('click', async () => {
-                        const selectError = document.getElementById('join-org-select-error');
-                        if (selectError) selectError.textContent = '';
-                        const selectedOrgId = orgSelect.value;
-                        if (!selectedOrgId) {
-                            if (selectError) selectError.textContent = 'Please select an organization.';
-                            return;
-                        }
-                        joinOrgSelectBtn.disabled = true;
-                        joinOrgSelectBtn.textContent = 'Joining...';
-                        try {
-                            const res = await store.joinOrganization(currentUser.id, { institutionId: Number(selectedOrgId) });
-                            if (res && res.organization) {
-                                currentUser.organizationId = res.organization.id;
-                            }
-                            toast.success('Joined organization successfully!');
-                            routes['#/dashboard']();
-                        } catch (error) {
-                            if (selectError) selectError.textContent = error.message || 'Failed to join organization';
-                            toast.error(error.message || 'Failed to join organization');
-                        } finally {
-                            joinOrgSelectBtn.disabled = false;
-                            joinOrgSelectBtn.textContent = 'JOIN';
-                        }
-                    });
-                }
+
 
                 document.querySelectorAll('.submit-subtask-btn').forEach((button) => {
                     button.addEventListener('click', async () => {
@@ -1760,32 +1769,41 @@ function apply3DMotion() {
     if (!cards.length) {
         return;
     }
-    let frame = null;
-    let activeEl = null;
-
-    const updateTilt = (event) => {
-        const rect = activeEl.getBoundingClientRect();
-        const relX = (event.clientX - rect.left) / rect.width - 0.5;
-        const relY = (event.clientY - rect.top) / rect.height - 0.5;
-        const tiltX = relY * -6;
-        const tiltY = relX * 10;
-        activeEl.style.transform = `perspective(900px) rotateX(${tiltX.toFixed(2)}deg) rotateY(${tiltY.toFixed(2)}deg) translateZ(0)`;
-    };
 
     cards.forEach((card) => {
-        card.addEventListener('pointermove', (event) => {
-            activeEl = card;
-            if (frame) {
-                return;
-            }
+        if (card.dataset.tiltBound === '1') return;
+        card.dataset.tiltBound = '1';
+
+        let frame = null;
+        let lastX = 0;
+        let lastY = 0;
+
+        const onPointerMove = (event) => {
+            lastX = event.clientX;
+            lastY = event.clientY;
+            if (frame) return;
             frame = requestAnimationFrame(() => {
-                updateTilt(event);
                 frame = null;
+                const rect = card.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) return;
+                const relX = (lastX - rect.left) / rect.width - 0.5;
+                const relY = (lastY - rect.top) / rect.height - 0.5;
+                const tiltX = relY * -6;
+                const tiltY = relX * 10;
+                card.style.transform = `perspective(900px) rotateX(${tiltX.toFixed(2)}deg) rotateY(${tiltY.toFixed(2)}deg) translateZ(0)`;
             });
-        });
-        card.addEventListener('pointerleave', () => {
+        };
+
+        const onPointerLeave = () => {
+            if (frame) {
+                cancelAnimationFrame(frame);
+                frame = null;
+            }
             card.style.transform = '';
-        });
+        };
+
+        card.addEventListener('pointermove', onPointerMove);
+        card.addEventListener('pointerleave', onPointerLeave);
     });
 }
 
