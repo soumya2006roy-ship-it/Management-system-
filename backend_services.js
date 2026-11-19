@@ -1,4 +1,3 @@
-const PDFDocument = require('pdfkit');
 const crypto = require('crypto');
 const {
     escapeLike,
@@ -11,6 +10,8 @@ const {
     DUMMY_HASH
 } = require('./auth_utils');
 const { logError } = require('./logger');
+const { ExportService, escapeCsvCell, formatCsvRow } = require('./services/export_service');
+const { SchemesService } = require('./services/schemes_service');
 
 const USER_PUBLIC_FIELDS = 'id, username, name, role, organizationId';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -26,29 +27,15 @@ class ApiError extends Error {
     }
 }
 
-
-function escapeCsvCell(value) {
-    if (value === null || value === undefined) return '';
-    let str = String(value);
-    if (/^[=+\-@\t\r]/.test(str)) {
-        str = "'" + str;
-    }
-    if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
-        str = '"' + str.replace(/"/g, '""') + '"';
-    }
-    return str;
-}
-
-function formatCsvRow(values) {
-    return values.map(escapeCsvCell).join(',') + '\r\n';
-}
-
 class BackendServices {
     constructor(data, mailer = null, config = null) {
         this.config = config;
         this.data = data;
         this.mailer = mailer;
         this.platformAdminIds = new Set();
+        this.ApiError = ApiError;
+        this.exportService = new ExportService(this.data, this);
+        this.schemesService = new SchemesService(this.data, this);
     }
 
     async createSession(userId) {
@@ -2035,234 +2022,19 @@ class BackendServices {
 
 
     async exportTasksCsv(userId, options = {}, stream) {
-        if (!userId) throw new ApiError(401, 'Unauthorized');
-        const user = await this.getPublicUserById(userId);
-        if (!user) throw new ApiError(401, 'User not found');
-        const orgId = user.organizationId;
-        if (!orgId) throw new ApiError(400, 'User does not belong to an organization');
-
-        const params = [orgId];
-        let sql = `
-            SELECT t.id, t.title, t.description, t.status, t.priority, t.progress, t.deadline,
-                   u.name AS assigneeName, p.name AS projectName
-            FROM tasks t
-            JOIN projects p ON p.id = t.projectId
-            LEFT JOIN users u ON u.id = t.assignedTo
-            WHERE p.organizationId = ?
-        `;
-
-        if (options.projectId) {
-            sql += ' AND t.projectId = ?';
-            params.push(options.projectId);
-        }
-        if (options.status) {
-            sql += ' AND t.status = ?';
-            params.push(options.status);
-        }
-        if (options.assignedTo) {
-            sql += ' AND t.assignedTo = ?';
-            params.push(options.assignedTo);
-        }
-        if (options.search) {
-            sql += ' AND (t.title LIKE ? OR t.description LIKE ?)';
-            params.push(`%${options.search}%`, `%${options.search}%`);
-        }
-        sql += ' ORDER BY t.id DESC';
-
-        stream.write('\uFEFF'); // UTF-8 BOM
-        stream.write(formatCsvRow(['Task ID', 'Title', 'Description', 'Status', 'Priority', 'Progress (%)', 'Assignee', 'Project', 'Deadline']));
-
-        let offset = 0;
-        const chunkSize = 500;
-        while (true) {
-            const chunk = await this.data.all(`${sql} LIMIT ? OFFSET ?`, [...params, chunkSize, offset]);
-            if (!chunk.length) break;
-            for (const t of chunk) {
-                const deadlineFormatted = t.deadline
-                    ? new Date(isNaN(Number(t.deadline)) ? t.deadline : Number(t.deadline)).toISOString().split('T')[0]
-                    : '';
-                const row = [
-                    t.id,
-                    t.title,
-                    t.description || '',
-                    t.status,
-                    t.priority || 'normal',
-                    t.progress || 0,
-                    t.assigneeName || 'Unassigned',
-                    t.projectName || '',
-                    deadlineFormatted
-                ];
-                stream.write(formatCsvRow(row));
-            }
-            offset += chunk.length;
-            if (chunk.length < chunkSize) break;
-        }
-        stream.end();
+        return this.exportService.exportTasksCsv(userId, options, stream);
     }
 
     async exportProjectsCsv(userId, options = {}, stream) {
-        if (!userId) throw new ApiError(401, 'Unauthorized');
-        const user = await this.getPublicUserById(userId);
-        if (!user) throw new ApiError(401, 'User not found');
-        const orgId = user.organizationId;
-        if (!orgId) throw new ApiError(400, 'User does not belong to an organization');
-
-        const projects = await this.data.all(`
-            SELECT p.id, p.name, p.status, p.progress
-            FROM projects p
-            WHERE p.organizationId = ?
-            ORDER BY p.name COLLATE NOCASE
-        `, [orgId]);
-
-        const allTasks = await this.data.all(`
-            SELECT t.projectId, t.status, t.deadline
-            FROM tasks t
-            JOIN projects p ON p.id = t.projectId
-            WHERE p.organizationId = ?
-        `, [orgId]);
-
-        const tasksByProject = new Map();
-        for (const t of allTasks) {
-            if (!tasksByProject.has(t.projectId)) tasksByProject.set(t.projectId, []);
-            tasksByProject.get(t.projectId).push(t);
-        }
-
-        stream.write('\uFEFF');
-        stream.write(formatCsvRow(['Project ID', 'Name', 'Status', 'Progress (%)', 'Total Tasks', 'Completed Tasks', 'Overdue Tasks']));
-
-        for (const p of projects) {
-            const pTasks = tasksByProject.get(p.id) || [];
-            const totalTasks = pTasks.length;
-            const completedTasks = pTasks.filter(t => String(t.status).toLowerCase() === 'completed').length;
-            const overdueTasks = pTasks.filter(t => String(t.status).toLowerCase() !== 'completed' && this.isDeadlineOverdue(t.deadline)).length;
-            stream.write(formatCsvRow([
-                p.id,
-                p.name,
-                p.status,
-                p.progress || 0,
-                totalTasks,
-                completedTasks,
-                overdueTasks
-            ]));
-        }
-        stream.end();
+        return this.exportService.exportProjectsCsv(userId, options, stream);
     }
 
     async exportMembersCsv(userId, options = {}, stream) {
-        if (!userId) throw new ApiError(401, 'Unauthorized');
-        const user = await this.getPublicUserById(userId);
-        if (!user) throw new ApiError(401, 'User not found');
-        const orgId = user.organizationId;
-        if (!orgId) throw new ApiError(400, 'User does not belong to an organization');
-
-        const sql = `
-            SELECT u.id, u.name, u.username, u.role
-            FROM users u
-            WHERE u.organizationId = ?
-            ORDER BY u.name COLLATE NOCASE
-        `;
-
-        stream.write('\uFEFF');
-        stream.write(formatCsvRow(['Member ID', 'Name', 'Username', 'Role']));
-
-        const rows = await this.data.all(sql, [orgId]);
-        for (const r of rows) {
-            stream.write(formatCsvRow([r.id, r.name, r.username, r.role]));
-        }
-        stream.end();
+        return this.exportService.exportMembersCsv(userId, options, stream);
     }
 
     async exportProjectPdf(userId, projectId, stream) {
-        if (!userId) throw new ApiError(401, 'Unauthorized');
-        const user = await this.getPublicUserById(userId);
-        if (!user) throw new ApiError(401, 'User not found');
-        const orgId = user.organizationId;
-        if (!orgId) throw new ApiError(400, 'User does not belong to an organization');
-
-        const project = await this.data.get('SELECT * FROM projects WHERE id = ? AND organizationId = ?', [projectId, orgId]);
-        if (!project) throw new ApiError(404, 'Project not found');
-
-        const tasks = await this.data.all(`
-            SELECT t.id, t.title, t.status, t.priority, t.progress, t.deadline, u.name AS assigneeName
-            FROM tasks t
-            LEFT JOIN users u ON u.id = t.assignedTo
-            WHERE t.projectId = ?
-            ORDER BY t.id ASC
-        `, [projectId]);
-
-        const org = await this.data.get('SELECT name FROM institutions WHERE id = ?', [orgId]);
-        const orgName = org ? org.name : 'Government Entity';
-
-        const totalTasks = tasks.length;
-        const completedTasks = tasks.filter(t => String(t.status).toLowerCase() === 'completed').length;
-        const inProgressTasks = tasks.filter(t => ['in_progress', 'in progress'].includes(String(t.status).toLowerCase())).length;
-        const overdueTasks = tasks.filter(t => String(t.status).toLowerCase() !== 'completed' && this.isDeadlineOverdue(t.deadline)).length;
-
-        const doc = new PDFDocument({ margin: 40, size: 'A4' });
-        doc.pipe(stream);
-
-        // Header
-        doc.fontSize(16).fillColor('#0f172a').text('ORION PROJECT STATUS REPORT', { align: 'center' });
-        doc.moveDown(0.3);
-        doc.fontSize(9).fillColor('#64748b').text(`Organization: ${orgName} | Generated: ${new Date().toLocaleDateString()} | Confidential - Official Use`, { align: 'center' });
-        doc.moveDown(1.2);
-
-        // Project Summary Box
-        const boxTop = doc.y;
-        doc.rect(40, boxTop, 515, 65).fillAndStroke('#f8fafc', '#cbd5e1');
-        doc.fillColor('#0f172a').fontSize(13).text(`Project: ${project.name}`, 55, boxTop + 10);
-        doc.fontSize(9.5).fillColor('#334155').text(
-            `Status: ${project.status}    Progress: ${project.progress || 0}%    Total Tasks: ${totalTasks}    Completed: ${completedTasks}    In Progress: ${inProgressTasks}    Overdue: ${overdueTasks}`,
-            55,
-            boxTop + 32,
-            { width: 485 }
-        );
-
-        doc.y = boxTop + 80;
-        doc.moveDown(0.5);
-
-        // Tasks Table Header
-        doc.fontSize(11).fillColor('#0f172a').text('Detailed Tasks Breakdown', 40, doc.y);
-        doc.moveDown(0.4);
-
-        const tableTop = doc.y;
-        doc.rect(40, tableTop, 515, 20).fill('#1e293b');
-        doc.fillColor('#ffffff').fontSize(8.5);
-        doc.text('ID', 48, tableTop + 5);
-        doc.text('Title', 75, tableTop + 5);
-        doc.text('Status', 245, tableTop + 5);
-        doc.text('Priority', 320, tableTop + 5);
-        doc.text('Assignee', 380, tableTop + 5);
-        doc.text('Deadline', 475, tableTop + 5);
-
-        let rowY = tableTop + 20;
-        for (let i = 0; i < tasks.length; i++) {
-            if (rowY > 750) {
-                doc.addPage();
-                rowY = 40;
-            }
-            const t = tasks[i];
-            const bg = i % 2 === 0 ? '#f8fafc' : '#ffffff';
-            doc.rect(40, rowY, 515, 18).fill(bg);
-            doc.fillColor('#334155').fontSize(8);
-            doc.text(String(t.id), 48, rowY + 4);
-            doc.text(t.title, 75, rowY + 4, { width: 165, ellipsis: true });
-            doc.text(t.status || 'todo', 245, rowY + 4);
-            doc.text(t.priority || 'normal', 320, rowY + 4);
-            doc.text(t.assigneeName || 'Unassigned', 380, rowY + 4, { width: 90, ellipsis: true });
-            const deadlineFormatted = t.deadline
-                ? new Date(isNaN(Number(t.deadline)) ? t.deadline : Number(t.deadline)).toISOString().split('T')[0]
-                : '-';
-            doc.text(deadlineFormatted, 475, rowY + 4);
-            rowY += 18;
-        }
-
-        return new Promise((resolve, reject) => {
-            stream.on('finish', resolve);
-            stream.on('error', reject);
-            doc.on('error', reject);
-            doc.end();
-        });
+        return this.exportService.exportProjectPdf(userId, projectId, stream);
     }
 
 
@@ -2681,234 +2453,19 @@ class BackendServices {
     }
 
     calculateSchemeMatch(project, scheme, taskCount = 0, org = null) {
-        let score = 0;
-        const rules = [];
-        const unknownCriteria = [];
-
-        // Rule 1: Project Progress Milestone (Weight: 35)
-        const progress = Number(project.progress) || 0;
-        if (progress >= 20) {
-            score += 35;
-            rules.push({
-                rule: 'project_progress_threshold',
-                name: 'Progress Milestone Threshold',
-                weight: 35,
-                matched: true,
-                reason: `Project progress is at ${progress}%, satisfying the minimum 20% milestone progress threshold.`
-            });
-        } else {
-            rules.push({
-                rule: 'project_progress_threshold',
-                name: 'Progress Milestone Threshold',
-                weight: 35,
-                matched: false,
-                reason: `Project progress is at ${progress}%, which is below the minimum 20% threshold required for funding.`
-            });
-        }
-
-        // Rule 2: Sector & Mission Synergy (Weight: 35)
-        const projectText = `${project.name || ''} ${project.description || ''}`.toLowerCase();
-        const orgText = `${org?.name || ''} ${org?.type || ''}`.toLowerCase();
-        const schemeSector = (scheme.sector || '').toLowerCase();
-        
-        let sectorMatched = false;
-        if (schemeSector.includes('aerospace') || schemeSector.includes('drone')) {
-            sectorMatched = projectText.includes('drone') || projectText.includes('aero') || projectText.includes('space') ||
-                            projectText.includes('payload') || projectText.includes('propulsion') ||
-                            orgText.includes('space') || orgText.includes('aero') || orgText.includes('defence');
-        } else if (schemeSector.includes('defence') || schemeSector.includes('deeptech')) {
-            sectorMatched = projectText.includes('defen') || projectText.includes('deep') || projectText.includes('tech') ||
-                            projectText.includes('shield') || projectText.includes('security') ||
-                            orgText.includes('defence') || orgText.includes('research') || orgText.includes('security');
-        } else if (schemeSector.includes('it') || schemeSector.includes('digital') || schemeSector.includes('governance')) {
-            sectorMatched = projectText.includes('data') || projectText.includes('digital') || projectText.includes('software') ||
-                            projectText.includes('portal') || projectText.includes('govern') || orgText.includes('government') || orgText.includes('it');
-        }
-
-        if (sectorMatched) {
-            score += 35;
-            rules.push({
-                rule: 'sector_alignment',
-                name: 'Sector & Organizational Synergy',
-                weight: 35,
-                matched: true,
-                reason: `Project domain ('${project.name}') and organization ('${org?.name || 'Verified Org'}') demonstrate direct synergy with scheme sector '${scheme.sector}'.`
-            });
-        } else {
-            rules.push({
-                rule: 'sector_alignment',
-                name: 'Sector & Organizational Synergy',
-                weight: 35,
-                matched: false,
-                reason: `Project domain does not strongly align with scheme sector '${scheme.sector}'.`
-            });
-        }
-
-        // Rule 3: Active Lifecycle Status (Weight: 15)
-        const status = String(project.status || 'In Progress').toLowerCase();
-        if (status !== 'completed' && status !== 'archived') {
-            score += 15;
-            rules.push({
-                rule: 'active_lifecycle_status',
-                name: 'Active Project Lifecycle',
-                weight: 15,
-                matched: true,
-                reason: `Project is currently active ('${project.status || 'In Progress'}') and eligible for ongoing tranche disbursement.`
-            });
-        } else {
-            rules.push({
-                rule: 'active_lifecycle_status',
-                name: 'Active Project Lifecycle',
-                weight: 15,
-                matched: false,
-                reason: `Project is marked as '${project.status}', and cannot receive active development subsidies.`
-            });
-        }
-
-        // Rule 4: Structured Milestone Governance (Weight: 15)
-        if (taskCount > 0) {
-            score += 15;
-            rules.push({
-                rule: 'structured_governance',
-                name: 'Structured Milestone Breakdown',
-                weight: 15,
-                matched: true,
-                reason: `Project has structured governance with ${taskCount} defined task/subtask milestone(s).`
-            });
-        } else {
-            rules.push({
-                rule: 'structured_governance',
-                name: 'Structured Milestone Breakdown',
-                weight: 15,
-                matched: false,
-                reason: 'Project lacks active tracked tasks or subtask milestones in ORION.'
-            });
-        }
-
-        // Unverifiable Criteria (shown transparently as "unknown")
-        unknownCriteria.push({
-            criterion: 'Statutory Financial & Turnover Audit',
-            status: 'unknown',
-            reason: 'Requires certified chartered accountant audit report and balance sheet verification.'
-        });
-        unknownCriteria.push({
-            criterion: 'Domestic Value Addition (DVA) Certificate',
-            status: 'unknown',
-            reason: 'Requires procurement billing documentation proving minimum domestic value addition.'
-        });
-
-        const matchReasons = rules
-            .filter(r => r.matched)
-            .map(r => `[+${r.weight}%] ${r.name}: ${r.reason}`)
-            .join('; ');
-
-        return {
-            matchScore: Math.min(100, score),
-            rules,
-            unknownCriteria,
-            matchReason: matchReasons || 'No criteria met'
-        };
+        return this.schemesService.calculateSchemeMatch(project, scheme, taskCount, org);
     }
 
-    async getGovernmentSchemes({ sector, search } = {}) {
-        let sql = "SELECT * FROM government_schemes WHERE status = 'active'";
-        const params = [];
-        if (sector) {
-            sql += ' AND sector LIKE ?';
-            params.push(`%${sector}%`);
-        }
-        if (search) {
-            sql += ' AND (title LIKE ? OR description LIKE ? OR ministry LIKE ?)';
-            params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-        }
-        sql += ' ORDER BY id ASC';
-        return await this.data.all(sql, params);
+    async getGovernmentSchemes(options = {}) {
+        return this.schemesService.getGovernmentSchemes(options);
     }
 
     async getSchemesForProject(userId, projectId) {
-        if (!userId) throw new ApiError(401, 'Unauthorized');
-        const user = await this.getPublicUserById(userId);
-        if (!user || !user.organizationId) {
-            throw new ApiError(403, 'Access denied: User does not belong to a verified organization');
-        }
-        const project = await this.data.get('SELECT * FROM projects WHERE id = ?', [projectId]);
-        if (!project) throw new ApiError(404, 'Project not found');
-        if (!project.organizationId || project.organizationId !== user.organizationId) {
-            throw new ApiError(403, 'Access denied: Project does not belong to your organization');
-        }
-
-        const org = await this.data.get('SELECT * FROM institutions WHERE id = ?', [user.organizationId]);
-        const taskCountRes = await this.data.get('SELECT COUNT(*) AS total FROM tasks WHERE projectId = ?', [projectId]);
-        const taskCount = taskCountRes?.total || 0;
-
-        const schemes = await this.data.all("SELECT * FROM government_schemes WHERE status = 'active' ORDER BY id ASC");
-        const matches = await this.data.all('SELECT * FROM project_scheme_matches WHERE projectId = ?', [projectId]);
-        const matchMap = new Map(matches.map(m => [m.schemeId, m]));
-
-        return schemes.map(scheme => {
-            const existing = matchMap.get(scheme.id);
-            const evaluation = this.calculateSchemeMatch(project, scheme, taskCount, org);
-
-            return {
-                ...scheme,
-                matchScore: existing ? existing.matchScore : evaluation.matchScore,
-                rules: evaluation.rules,
-                unknownCriteria: evaluation.unknownCriteria,
-                matchReason: existing && existing.matchReason ? existing.matchReason : evaluation.matchReason,
-                applicationStatus: existing ? existing.applicationStatus : 'recommended',
-                appliedAt: existing ? existing.appliedAt : null
-            };
-        });
+        return this.schemesService.getSchemesForProject(userId, projectId);
     }
 
     async applyForScheme(userId, projectId, schemeId) {
-        if (!userId) throw new ApiError(401, 'Unauthorized');
-        const user = await this.getPublicUserById(userId);
-        if (user.role !== 'manager' && user.role !== 'exec') {
-            throw new ApiError(403, 'Only organization managers or administrators can apply for government schemes');
-        }
-        if (!user.organizationId) {
-            throw new ApiError(403, 'Access denied: User does not belong to an organization');
-        }
-
-        const project = await this.data.get('SELECT * FROM projects WHERE id = ?', [projectId]);
-        if (!project || !project.organizationId || project.organizationId !== user.organizationId) {
-            throw new ApiError(403, 'Access denied: Project does not belong to your organization');
-        }
-
-        const scheme = await this.data.get('SELECT * FROM government_schemes WHERE id = ?', [schemeId]);
-        if (!scheme) throw new ApiError(404, 'Scheme not found');
-
-        const org = await this.data.get('SELECT * FROM institutions WHERE id = ?', [user.organizationId]);
-        const taskCountRes = await this.data.get('SELECT COUNT(*) AS total FROM tasks WHERE projectId = ?', [projectId]);
-        const taskCount = taskCountRes?.total || 0;
-        const evaluation = this.calculateSchemeMatch(project, scheme, taskCount, org);
-
-        const now = Date.now();
-        await this.data.run(
-            `INSERT INTO project_scheme_matches (projectId, schemeId, matchScore, matchReason, applicationStatus, appliedAt)
-             VALUES (?, ?, ?, ?, 'applied', ?)
-             ON CONFLICT(projectId, schemeId) DO UPDATE SET
-                 applicationStatus = 'applied',
-                 appliedAt = excluded.appliedAt,
-                 matchScore = excluded.matchScore,
-                 matchReason = excluded.matchReason`,
-            [projectId, schemeId, evaluation.matchScore, evaluation.matchReason, now]
-        );
-
-        this.data.addUpdate(
-            user.name,
-            `Submitted application for government scheme "${scheme.title}" for project "${project.name}"`,
-            user.organizationId
-        );
-
-        return {
-            success: true,
-            message: `Application submitted for ${scheme.title}`,
-            matchScore: evaluation.matchScore,
-            applicationStatus: 'applied',
-            appliedAt: now
-        };
+        return this.schemesService.applyForScheme(userId, projectId, schemeId);
     }
 
 }
