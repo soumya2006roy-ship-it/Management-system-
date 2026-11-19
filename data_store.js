@@ -543,3 +543,6 @@ class DataStore {
     }
 
 }
+
+export const store = new DataStore();
+export { DataStore };
