@@ -1998,7 +1998,6 @@ function setupAiAssistant() {
             panel.classList.remove('open');
         }
     });
-});
 }
 
 // Global modal & drawer dismiss on Escape or backdrop click
